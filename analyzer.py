@@ -1,0 +1,331 @@
+"""
+主分析器 - 整合所有组件的核心分析器
+"""
+
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Optional, Union
+import logging
+from tqdm import tqdm
+import json
+import os
+from datetime import datetime
+
+from .text_processor import TextProcessor, StructureZoneExtractor, FragmentGenerator
+from .bias_teacher import TeacherInference
+from .framing_scorer import FramingAnalysisEngine, FramingResult
+from .relative_framing import RelativeFramingAnalyzer
+from .utils import setup_logging, save_results, validate_input_data
+
+logger = logging.getLogger(__name__)
+
+class FramingAnalyzer:
+    """框架偏见分析器主类"""
+    
+    def __init__(self, config):
+        self.config = config
+        
+        # 设置日志
+        setup_logging(config.log_level)
+        
+        # 初始化组件
+        self.text_processor = TextProcessor(config)
+        self.zone_extractor = StructureZoneExtractor(config)
+        self.fragment_generator = FragmentGenerator(config)
+        self.teacher_inference = TeacherInference(config)
+        self.framing_engine = FramingAnalysisEngine(config)
+        
+        # 可选的相对框架分析器
+        self.relative_analyzer = None
+        if config.relative_framing.enabled:
+            self.relative_analyzer = RelativeFramingAnalyzer(config)
+        
+        logger.info("FramingAnalyzer initialized successfully")
+    
+    def analyze_article(self, content: str, title: str = "") -> FramingResult:
+        """分析单篇文章"""
+        
+        # Step 1 & 2: 文本预处理和结构区划分
+        processed_article = self.text_processor.process_article(content, title)
+        processed_article = self.zone_extractor.divide_into_zones(processed_article)
+        
+        # Step 3: 生成片段
+        fragments = self.fragment_generator.create_fragments(processed_article)
+        
+        # Step 4: Teacher推理
+        zone_fragments = self.teacher_inference.process_article_fragments(fragments)
+        
+        # Step 5-8: 框架分析
+        result = self.framing_engine.analyze_article(zone_fragments)
+        
+        return result
+    
+    def analyze_batch(self, articles: List[Dict], output_path: Optional[str] = None) -> Dict:
+        """批量分析文章
+        
+        Args:
+            articles: 文章列表，每个元素包含 {'content': str, 'title': str, 'id': str}
+            output_path: 输出文件路径（可选）
+        
+        Returns:
+            包含所有结果的字典
+        """
+        
+        logger.info(f"Starting batch analysis of {len(articles)} articles")
+        
+        # 验证输入数据
+        articles = validate_input_data(articles)
+        
+        # 第一轮：计算所有文章的framing强度（用于拟合阈值）
+        logger.info("First pass: Computing framing intensities for threshold fitting")
+        framing_scores = []
+        
+        for article in tqdm(articles, desc="Computing framing scores"):
+            try:
+                result = self.analyze_article(article['content'], article.get('title', ''))
+                framing_scores.append(result.framing_intensity)
+            except Exception as e:
+                logger.error(f"Error processing article {article.get('id', 'unknown')}: {e}")
+                framing_scores.append(0.0)  # 默认分数
+        
+        # 拟合伪标签阈值
+        self.framing_engine.fit_pseudo_label_thresholds(framing_scores)
+        threshold_info = self.framing_engine.get_threshold_info()
+        logger.info(f"Fitted thresholds: {threshold_info}")
+        
+        # 第二轮：完整分析（包含正确的伪标签）
+        logger.info("Second pass: Complete analysis with fitted thresholds")
+        results = []
+        
+        for i, article in enumerate(tqdm(articles, desc="Full analysis")):
+            try:
+                result = self.analyze_article(article['content'], article.get('title', ''))
+                
+                # 添加文章元信息
+                result_dict = self._format_result(result, article, i)
+                results.append(result_dict)
+                
+            except Exception as e:
+                logger.error(f"Error in full analysis of article {article.get('id', 'unknown')}: {e}")
+                # 添加错误结果
+                error_result = self._create_error_result(article, i, str(e))
+                results.append(error_result)
+        
+        # 相对框架分析（可选）
+        if self.relative_analyzer:
+            logger.info("Computing relative framing scores")
+            results = self.relative_analyzer.compute_relative_scores(results)
+        
+        # 生成批量统计
+        batch_stats = self._compute_batch_statistics(results, threshold_info)
+        
+        # 组装最终结果
+        final_results = {
+            'metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'total_articles': len(articles),
+                'successful_analyses': len([r for r in results if not r.get('error')]),
+                'failed_analyses': len([r for r in results if r.get('error')]),
+                'config': self._serialize_config()
+            },
+            'threshold_info': threshold_info,
+            'batch_statistics': batch_stats,
+            'results': results
+        }
+        
+        # 保存结果
+        if output_path:
+            save_results(final_results, output_path, self.config.output)
+            logger.info(f"Results saved to {output_path}")
+        
+        logger.info("Batch analysis completed successfully")
+        return final_results
+    
+    def analyze_from_csv(self, csv_path: str, 
+                        content_column: str = 'content',
+                        title_column: str = 'title',
+                        id_column: str = 'id',
+                        output_path: Optional[str] = None) -> Dict:
+        """从CSV文件分析文章"""
+        
+        logger.info(f"Loading articles from CSV: {csv_path}")
+        
+        # 读取CSV
+        df = pd.read_csv(csv_path)
+        logger.info(f"Loaded {len(df)} articles from CSV")
+        
+        # 转换为标准格式
+        articles = []
+        for i, row in df.iterrows():
+            article = {
+                'content': str(row.get(content_column, '')),
+                'title': str(row.get(title_column, '')),
+                'id': str(row.get(id_column, f'article_{i}'))
+            }
+            
+            # 添加其他列作为元数据
+            for col in df.columns:
+                if col not in [content_column, title_column, id_column]:
+                    article[col] = row[col]
+            
+            articles.append(article)
+        
+        # 批量分析
+        return self.analyze_batch(articles, output_path)
+    
+    def _format_result(self, result: FramingResult, article: Dict, index: int) -> Dict:
+        """格式化单个结果"""
+        
+        formatted = {
+            'id': article.get('id', f'article_{index}'),
+            'title': article.get('title', ''),
+            'framing_intensity': result.framing_intensity,
+            'pseudo_label': result.pseudo_label
+        }
+        
+        # 添加组件分数
+        if self.config.output.include_components:
+            formatted['components'] = result.components
+        
+        # 添加证据片段
+        if self.config.output.include_evidence:
+            formatted['evidence'] = result.evidence
+        
+        # 添加统计信息
+        if self.config.output.include_statistics:
+            formatted['statistics'] = result.statistics
+        
+        # 添加原始分数
+        if self.config.output.include_raw_scores and result.raw_scores:
+            formatted['raw_scores'] = result.raw_scores
+        
+        # 添加文章元数据
+        for key, value in article.items():
+            if key not in ['content', 'title', 'id']:
+                formatted[f'meta_{key}'] = value
+        
+        return formatted
+    
+    def _create_error_result(self, article: Dict, index: int, error_msg: str) -> Dict:
+        """创建错误结果"""
+        return {
+            'id': article.get('id', f'article_{index}'),
+            'title': article.get('title', ''),
+            'error': True,
+            'error_message': error_msg,
+            'framing_intensity': 0.0,
+            'pseudo_label': 'error'
+        }
+    
+    def _compute_batch_statistics(self, results: List[Dict], threshold_info: Dict) -> Dict:
+        """计算批量统计"""
+        
+        # 过滤掉错误结果
+        valid_results = [r for r in results if not r.get('error')]
+        
+        if not valid_results:
+            return {'error': 'No valid results to compute statistics'}
+        
+        # 提取分数
+        framing_scores = [r['framing_intensity'] for r in valid_results]
+        pseudo_labels = [r['pseudo_label'] for r in valid_results]
+        
+        # 基础统计
+        stats = {
+            'framing_intensity': {
+                'mean': np.mean(framing_scores),
+                'std': np.std(framing_scores),
+                'min': np.min(framing_scores),
+                'max': np.max(framing_scores),
+                'median': np.median(framing_scores),
+                'q25': np.percentile(framing_scores, 25),
+                'q75': np.percentile(framing_scores, 75)
+            },
+            'pseudo_label_distribution': {
+                label: pseudo_labels.count(label) for label in set(pseudo_labels)
+            },
+            'pseudo_label_percentages': {
+                label: (pseudo_labels.count(label) / len(pseudo_labels)) * 100 
+                for label in set(pseudo_labels)
+            }
+        }
+        
+        # 组件统计（如果包含）
+        if self.config.output.include_components and 'components' in valid_results[0]:
+            component_stats = {}
+            for component in ['headline', 'lede', 'narration', 'quotes']:
+                component_scores = [r['components'][component] for r in valid_results 
+                                  if component in r['components']]
+                if component_scores:
+                    component_stats[component] = {
+                        'mean': np.mean(component_scores),
+                        'std': np.std(component_scores),
+                        'min': np.min(component_scores),
+                        'max': np.max(component_scores)
+                    }
+            stats['components'] = component_stats
+        
+        return stats
+    
+    def _serialize_config(self) -> Dict:
+        """序列化配置"""
+        from dataclasses import asdict
+        return {
+            'processing': asdict(self.config.processing),
+            'teacher': asdict(self.config.teacher),
+            'scoring': asdict(self.config.scoring),
+            'output': asdict(self.config.output),
+            'relative_framing': asdict(self.config.relative_framing)
+        }
+    
+    def get_model_info(self) -> Dict:
+        """获取模型信息"""
+        return {
+            'teacher_model': self.config.teacher.model_name,
+            'max_length': self.config.teacher.max_length,
+            'fragment_mode': self.config.teacher.fragment_mode,
+            'device': self.teacher_inference.teacher.device,
+            'version': '1.0.0'
+        }
+    
+    def validate_setup(self) -> Dict:
+        """验证设置"""
+        validation_results = {
+            'model_loaded': False,
+            'tokenizer_loaded': False,
+            'device_available': False,
+            'config_valid': False,
+            'errors': []
+        }
+        
+        try:
+            # 检查模型
+            if self.teacher_inference.teacher.model is not None:
+                validation_results['model_loaded'] = True
+            
+            # 检查tokenizer
+            if self.teacher_inference.teacher.tokenizer is not None:
+                validation_results['tokenizer_loaded'] = True
+            
+            # 检查设备
+            import torch
+            device = self.teacher_inference.teacher.device
+            if device == 'cuda' and torch.cuda.is_available():
+                validation_results['device_available'] = True
+            elif device == 'cpu':
+                validation_results['device_available'] = True
+            
+            # 检查配置
+            validation_results['config_valid'] = True
+            
+        except Exception as e:
+            validation_results['errors'].append(str(e))
+        
+        validation_results['overall_status'] = all([
+            validation_results['model_loaded'],
+            validation_results['tokenizer_loaded'],
+            validation_results['device_available'],
+            validation_results['config_valid']
+        ])
+        
+        return validation_results
