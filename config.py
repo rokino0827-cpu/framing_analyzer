@@ -39,10 +39,10 @@ class ProcessingConfig:
         
         if self.quote_patterns is None:
             self.quote_patterns = [
-                r'"([^"]*)"',  # 英文双引号
-                r'"([^"]*)"',  # 中文双引号
-                r''([^']*)'',  # 中文单引号
-                r"'([^']*)'",  # 英文单引号
+                r'"([^"]+)"',      # 英文双引号
+                r"'([^']+)'",      # 英文单引号
+                r'"([^"]+)"',      # 中文双引号
+                r'‘([^’]+)’',      # 中文单引号
             ]
 
 @dataclass

@@ -173,26 +173,65 @@ class EvidenceExtractor:
         self.config = config.scoring
     
     def extract_evidence(self, zone_fragments: Dict[str, List[Dict]]) -> List[Dict]:
-        """提取Top-K证据片段"""
+        """提取Top-K证据片段，优先保留headline/lede的证据"""
         # 收集所有片段
         all_fragments = []
+        priority_zones = ['headline', 'lede']
+        priority_fragments = []
+        other_fragments = []
+        
         for zone, fragments in zone_fragments.items():
             for fragment in fragments:
                 fragment_copy = fragment.copy()
                 fragment_copy['zone'] = zone
+                
+                if zone in priority_zones:
+                    priority_fragments.append(fragment_copy)
+                else:
+                    other_fragments.append(fragment_copy)
                 all_fragments.append(fragment_copy)
         
         # 按bias_score排序
-        sorted_fragments = sorted(all_fragments, 
-                                key=lambda x: x['bias_score'], 
-                                reverse=True)
+        priority_fragments.sort(key=lambda x: x['bias_score'], reverse=True)
+        other_fragments.sort(key=lambda x: x['bias_score'], reverse=True)
+        all_fragments.sort(key=lambda x: x['bias_score'], reverse=True)
         
-        # 取Top-K
-        top_fragments = sorted_fragments[:self.config.evidence_count]
+        # 构建证据列表：优先保留至少1条headline/lede证据
+        evidence_fragments = []
+        seen_keys = set()
+        
+        def _frag_key(f: Dict) -> tuple:
+            """生成片段的唯一标识"""
+            return (
+                f.get('zone'),
+                f.get('fragment_type'),
+                f.get('sentence_idx'),
+                f.get('chunk_idx'),
+                f.get('window_idx'),
+                tuple(f.get('char_range', (None, None))),
+                tuple(f.get('sentence_range', (None, None))),
+                f.get('text', '')[:50],  # 兜底用文本前50字符
+            )
+        
+        # 先添加最高分的priority证据（如果存在）
+        if priority_fragments:
+            key = _frag_key(priority_fragments[0])
+            evidence_fragments.append(priority_fragments[0])
+            seen_keys.add(key)
+        
+        # 剩余位置从全局最高分中补充
+        for fragment in all_fragments:
+            if len(evidence_fragments) >= self.config.evidence_count:
+                break
+            
+            key = _frag_key(fragment)
+            if key not in seen_keys:
+                evidence_fragments.append(fragment)
+                seen_keys.add(key)
         
         # 格式化证据
         evidence = []
-        for i, fragment in enumerate(top_fragments):
+        for i, fragment in enumerate(evidence_fragments):
             evidence_item = {
                 'rank': i + 1,
                 'text': fragment['text'],

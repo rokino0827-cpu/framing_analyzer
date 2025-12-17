@@ -200,15 +200,16 @@ class StructureZoneExtractor:
         # Z2: Lede (导语 - 正文前N句)
         lede_count = min(self.config.lede_sentence_count, len(sentences))
         lede_sentences = sentences[:lede_count]
+        lede_indices = set(range(lede_count))
         
         # Z3: Quotes (引号句子)
-        quote_indices = self.extract_quotes(sentences)
+        quote_indices = set(self.extract_quotes(sentences))
         quote_sentences = [sentences[i] for i in quote_indices]
         
-        # Z4: Narration (正文句子 - 去掉引号句子)
+        # Z4: Narration (正文句子 - 去掉lede和引号句子，避免重叠)
         narration_sentences = [
             sentences[i] for i in range(len(sentences)) 
-            if i not in quote_indices
+            if i not in quote_indices and i not in lede_indices
         ]
         
         # 更新zones
@@ -256,8 +257,8 @@ class FragmentGenerator:
         fragments = []
         
         for i, sentence in enumerate(sentences):
-            # 简单的token估算（1个字符约等于0.5个token）
-            estimated_tokens = len(sentence) // 2
+            # 改进的token估算
+            estimated_tokens = self._estimate_tokens(sentence)
             
             if estimated_tokens <= self.config.max_length:
                 # 句子长度合适，直接使用
@@ -283,9 +284,10 @@ class FragmentGenerator:
         current_chunk = []
         current_tokens = 0
         chunk_idx = 0
+        chunk_start = 0
         
         for i, sentence in enumerate(sentences):
-            estimated_tokens = len(sentence) // 2
+            estimated_tokens = self._estimate_tokens(sentence)
             
             if current_tokens + estimated_tokens <= self.config.max_length:
                 # 可以加入当前块
@@ -299,12 +301,13 @@ class FragmentGenerator:
                         'zone': zone,
                         'chunk_idx': chunk_idx,
                         'fragment_type': 'chunk',
-                        'sentence_range': (len(fragments), i),
+                        'sentence_range': (chunk_start, i),
                         'estimated_tokens': current_tokens
                     })
                     chunk_idx += 1
                 
                 # 开始新块
+                chunk_start = i
                 current_chunk = [sentence]
                 current_tokens = estimated_tokens
         
@@ -315,7 +318,7 @@ class FragmentGenerator:
                 'zone': zone,
                 'chunk_idx': chunk_idx,
                 'fragment_type': 'chunk',
-                'sentence_range': (len(fragments), len(sentences)),
+                'sentence_range': (chunk_start, len(sentences)),
                 'estimated_tokens': current_tokens
             })
         
@@ -343,7 +346,7 @@ class FragmentGenerator:
                 'window_idx': window_idx,
                 'fragment_type': 'sliding_window',
                 'char_range': (start, end),
-                'estimated_tokens': len(window_text) // 2
+                'estimated_tokens': self._estimate_tokens(window_text)
             })
             
             if end >= len(sentence):
@@ -353,3 +356,17 @@ class FragmentGenerator:
             window_idx += 1
         
         return fragments
+    
+    def _estimate_tokens(self, text: str) -> int:
+        """改进的token估算方法"""
+        # 检测主要语言
+        chinese_chars = len([c for c in text if '\u4e00' <= c <= '\u9fff'])
+        total_chars = len(text)
+        
+        if chinese_chars > total_chars * 0.3:
+            # 主要是中文，使用字符数估算
+            return len(text) // 2
+        else:
+            # 主要是英文，使用单词数估算
+            words = text.split()
+            return int(len(words) * 1.3)  # 英文平均1.3 token per word

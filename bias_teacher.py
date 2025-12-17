@@ -75,12 +75,15 @@ class BiasTeacher:
     
     def _sort_fragments_by_length(self, fragments: List[Dict]) -> List[Dict]:
         """按文本长度排序片段以优化batching"""
-        # 添加原始索引
+        # 创建副本并添加原始索引，避免污染输入
+        fragments_with_idx = []
         for i, fragment in enumerate(fragments):
-            fragment['original_idx'] = i
+            fragment_copy = fragment.copy()
+            fragment_copy['original_idx'] = i
+            fragments_with_idx.append(fragment_copy)
         
         # 按估算token数排序
-        return sorted(fragments, key=lambda x: x.get('estimated_tokens', 0))
+        return sorted(fragments_with_idx, key=lambda x: x.get('estimated_tokens', 0))
     
     def _restore_original_order(self, results: List[Dict], original_fragments: List[Dict]) -> List[Dict]:
         """恢复原始顺序"""
@@ -106,21 +109,24 @@ class BiasTeacher:
         # 移动到设备
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
-        # 推理
-        with torch.no_grad():
+        # 推理 - 使用inference_mode获得更好性能
+        with torch.inference_mode():
             outputs = self.model(**inputs)
             logits = outputs.logits
             
             # 计算概率
             probabilities = torch.softmax(logits, dim=-1)
             bias_scores = probabilities[:, 1].cpu().numpy()  # 假设索引1是bias类
+            
+            # 批量计算confidence并转移到CPU (P1优化: 避免逐个转移)
+            all_confidences = torch.max(probabilities, dim=-1)[0].cpu().numpy()
         
         # 组装结果
         results = []
         for i, fragment in enumerate(batch):
             result = fragment.copy()
             result['bias_score'] = float(bias_scores[i])
-            result['confidence'] = float(np.max(probabilities[i].cpu().numpy()))
+            result['confidence'] = float(all_confidences[i])
             results.append(result)
         
         return results

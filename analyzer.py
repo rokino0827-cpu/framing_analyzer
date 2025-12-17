@@ -76,40 +76,44 @@ class FramingAnalyzer:
         # 验证输入数据
         articles = validate_input_data(articles)
         
-        # 第一轮：计算所有文章的framing强度（用于拟合阈值）
-        logger.info("First pass: Computing framing intensities for threshold fitting")
+        # 单轮推理：完整分析所有文章
+        logger.info("Single pass: Complete analysis for all articles")
+        results = []
         framing_scores = []
         
-        for article in tqdm(articles, desc="Computing framing scores"):
-            try:
-                result = self.analyze_article(article['content'], article.get('title', ''))
-                framing_scores.append(result.framing_intensity)
-            except Exception as e:
-                logger.error(f"Error processing article {article.get('id', 'unknown')}: {e}")
-                framing_scores.append(0.0)  # 默认分数
-        
-        # 拟合伪标签阈值
-        self.framing_engine.fit_pseudo_label_thresholds(framing_scores)
-        threshold_info = self.framing_engine.get_threshold_info()
-        logger.info(f"Fitted thresholds: {threshold_info}")
-        
-        # 第二轮：完整分析（包含正确的伪标签）
-        logger.info("Second pass: Complete analysis with fitted thresholds")
-        results = []
-        
-        for i, article in enumerate(tqdm(articles, desc="Full analysis")):
+        for i, article in enumerate(tqdm(articles, desc="Analyzing articles")):
             try:
                 result = self.analyze_article(article['content'], article.get('title', ''))
                 
-                # 添加文章元信息
+                # 收集framing分数用于阈值拟合
+                framing_scores.append(result.framing_intensity)
+                
+                # 添加文章元信息（伪标签先占位）
                 result_dict = self._format_result(result, article, i)
                 results.append(result_dict)
                 
             except Exception as e:
-                logger.error(f"Error in full analysis of article {article.get('id', 'unknown')}: {e}")
-                # 添加错误结果
+                logger.error(f"Error processing article {article.get('id', 'unknown')}: {e}")
+                # 添加错误结果，不计入framing_scores
                 error_result = self._create_error_result(article, i, str(e))
                 results.append(error_result)
+        
+        # 拟合伪标签阈值（只用成功的样本）
+        if framing_scores:
+            self.framing_engine.fit_pseudo_label_thresholds(framing_scores)
+            threshold_info = self.framing_engine.get_threshold_info()
+            logger.info(f"Fitted thresholds: {threshold_info}")
+            
+            # 重新生成所有伪标签（仅内存操作，无推理）
+            logger.info("Updating pseudo labels with fitted thresholds")
+            for result in results:
+                if not result.get('error'):
+                    result['pseudo_label'] = self.framing_engine.label_generator.generate_pseudo_label(
+                        result['framing_intensity']
+                    )
+        else:
+            logger.warning("No valid framing scores for threshold fitting")
+            threshold_info = {'thresholds': {'positive': 0.8, 'negative': 0.2}}
         
         # 相对框架分析（可选）
         if self.relative_analyzer:
