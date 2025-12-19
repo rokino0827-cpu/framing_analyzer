@@ -23,16 +23,6 @@ class OmissionDetector:
         
         # 复用TextProcessor实例，避免重复创建
         self.text_processor = None
-    
-    def _split_sentences(self, text: str):
-        """兼容TextProcessor.split_sentences的不同返回格式"""
-        if self.text_processor is None:
-            from .text_processor import TextProcessor
-            self.text_processor = TextProcessor(self.config)
-        
-        res = self.text_processor.split_sentences(text)
-        # 兼容返回tuple或list两种格式
-        return res[0] if isinstance(res, tuple) else res
         
         # TF-IDF向量化器用于主题提取
         self.tfidf_vectorizer = TfidfVectorizer(
@@ -42,6 +32,19 @@ class OmissionDetector:
             lowercase=True,
             min_df=1  # 改为1，避免小簇时空词表
         )
+    
+    def _split_sentences(self, text: str):
+        """兼容TextProcessor.split_sentences的不同返回格式"""
+        if not text:
+            return []
+            
+        if self.text_processor is None:
+            from .text_processor import TextProcessor
+            self.text_processor = TextProcessor(self.config)
+        
+        res = self.text_processor.split_sentences(text)
+        # 兼容返回tuple或list两种格式
+        return res[0] if isinstance(res, tuple) else res
     
     def cluster_articles_by_event(self, articles: List[Dict]) -> Dict[str, List[Dict]]:
         """
@@ -248,16 +251,16 @@ class OmissionDetector:
         try:
             # 提取文章的不同区域文本
             title = processed_article.title.lower() if processed_article.title else ""
-            content = processed_article.content.lower() if processed_article.content else ""
+            content = processed_article.content if processed_article.content else ""
             
-            # 使用已经切分好的句子来估算lede
+            # 使用已经切分好的句子来估算lede（原文分句，覆盖率计算时再lower）
             lede_sentences = processed_article.sentences[:4] if processed_article.sentences else []
             lede = ' '.join(lede_sentences).lower()
             
-            # 计算各区域的主题覆盖率
+            # 计算各区域的主题覆盖率（_compute_topic_coverage内部会处理大小写）
             headline_coverage = self._compute_topic_coverage(title, key_topics)
             lede_coverage = self._compute_topic_coverage(lede, key_topics)
-            full_coverage = self._compute_topic_coverage(content, key_topics)
+            full_coverage = self._compute_topic_coverage(content.lower(), key_topics)
             
             # 加权计算省略分数
             # 重点关注headline和lede的省略
@@ -286,9 +289,9 @@ class OmissionDetector:
         try:
             # 提取文章的不同区域文本
             title = article.get('title', '').lower()
-            content = article.get('content', '').lower()
+            content = article.get('content', '')
             
-            # 使用TextProcessor进行句子切分
+            # 使用TextProcessor进行句子切分（用原文，避免大小写影响分句）
             sentences = self._split_sentences(content)
             
             # 估算lede（前4句）
@@ -298,7 +301,7 @@ class OmissionDetector:
             # 计算各区域的主题覆盖率
             headline_coverage = self._compute_topic_coverage(title, key_topics)
             lede_coverage = self._compute_topic_coverage(lede, key_topics)
-            full_coverage = self._compute_topic_coverage(content, key_topics)
+            full_coverage = self._compute_topic_coverage(content.lower(), key_topics)
             
             # 加权计算省略分数
             # 重点关注headline和lede的省略
@@ -306,11 +309,11 @@ class OmissionDetector:
             lede_omission = 1.0 - lede_coverage
             full_omission = 1.0 - full_coverage
             
-            # 加权融合（headline和lede权重更高）
+            # 加权融合（使用配置中的权重）
             omission_score = (
-                0.4 * headline_omission +
-                0.4 * lede_omission +
-                0.2 * full_omission
+                self.config.omission.omission_weight_headline * headline_omission +
+                self.config.omission.omission_weight_lede * lede_omission +
+                self.config.omission.omission_weight_full * full_omission
             )
             
             return max(0.0, min(1.0, omission_score))
@@ -362,7 +365,7 @@ class OmissionDetector:
         
         try:
             # 找到其他文章中覆盖这些主题的片段
-            for omitted_topic in omissions[:5]:  # 限制数量
+            for omitted_topic in omissions[:self.config.omission.max_evidence_count]:  # 使用配置限制数量
                 exclude_id = article.get('id')
                 supporting_fragments = self._find_supporting_fragments(omitted_topic, cluster, exclude_id)
                 
@@ -377,7 +380,7 @@ class OmissionDetector:
                         'omitted_topic': omitted_topic,
                         'evidence_type': 'omission',
                         'supporting_articles': len(unique_article_ids),
-                        'examples': supporting_fragments[:3],  # 最多3个例子
+                        'examples': supporting_fragments[:self.config.omission.max_examples_per_evidence],  # 使用配置限制例子数量
                         'coverage_rate': len(unique_article_ids) / max(1, len(cluster) - 1)
                     }
                     evidence.append(evidence_item)
@@ -592,7 +595,7 @@ class OmissionDetector:
         
         return supporting_fragments
 
-    def _find_supporting_fragments(self, topic: str, cluster: List[Dict], exclude_article_id: str) -> List[Dict]:
+    def _find_supporting_fragments(self, topic: str, cluster: List[Dict], exclude_article_id: Optional[str]) -> List[Dict]:
         """找到支持某个主题的片段"""
         supporting_fragments = []
         

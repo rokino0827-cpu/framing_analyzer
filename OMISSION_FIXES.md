@@ -232,3 +232,17 @@ for result in results['results']:
 - ✅ **配置灵活** - 所有参数可调，适应不同场景
 
 **当前状态**: 省略检测功能完全生产就绪，可在真实数据上稳定运行，无已知问题。
+
+## 最终修复（第六轮 - 配置一致性完善）
+
+### ✅ 配置一致性修复
+- **compute_omission_score非processed版本**: 使用`self.config.omission.*`权重替代硬编码0.4/0.4/0.2
+- **extract_omission_evidence非processed版本**: 使用`self.config.omission.max_evidence_count`和`max_examples_per_evidence`替代硬编码5和3
+- **full_coverage计算**: 添加`.lower()`确保与其他区域一致的大小写处理
+
+### 🎯 配置驱动完整性
+- ✅ **所有魔法数字已消除** - 全部改为配置驱动
+- ✅ **processed和非processed版本一致** - 两个代码路径使用相同配置
+- ✅ **大小写处理一致** - 分句用原文，覆盖率计算统一lower
+
+**最终状态**: 所有方法完全配置驱动，无硬编码数字，两个代码路径（processed/非processed）逻辑完全一致。
