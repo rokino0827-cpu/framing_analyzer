@@ -26,6 +26,10 @@ class FramingResult:
     # 统计信息
     statistics: Dict[str, float]  # 各种统计量
     
+    # 省略感知结果（新增）
+    omission_score: Optional[float] = None  # 省略分数
+    omission_evidence: Optional[List[Dict]] = None  # 省略证据
+    
     # 原始数据（可选）
     raw_scores: Optional[Dict] = None
 
@@ -103,8 +107,14 @@ class FramingScorer:
         return indicators
     
     def compute_framing_intensity(self, zone_scores: Dict[str, float], 
-                                 indicators: Dict[str, float]) -> float:
+                                 indicators: Dict[str, float],
+                                 omission_score: Optional[float] = None) -> float:
         """合成文章级Framing-Intensity分数 - Step 6"""
+        
+        # 基础框架强度计算
+        base_weights_sum = (self.config.lede_weight + self.config.headline_weight + 
+                           self.config.narration_weight + self.config.quote_gap_weight + 
+                           self.config.sparse_signal_weight)
         
         F = (
             self.config.lede_weight * zone_scores.get('lede', 0.0) +
@@ -113,6 +123,14 @@ class FramingScorer:
             self.config.quote_gap_weight * indicators.get('quote_gap', 0.0) +
             self.config.sparse_signal_weight * indicators.get('frac_high', 0.0)
         )
+        
+        # 如果启用省略感知，整合省略分数
+        if omission_score is not None:
+            # 省略分数作为额外的结构指标，权重为0.1
+            omission_weight = 0.1
+            # 重新归一化其他权重
+            normalization_factor = (1.0 - omission_weight) / base_weights_sum
+            F = F * normalization_factor + omission_weight * omission_score
         
         # 确保在[0, 1]范围内
         return max(0.0, min(1.0, F))
@@ -273,16 +291,18 @@ class FramingAnalysisEngine:
         self.label_generator = PseudoLabelGenerator(config)
         self.evidence_extractor = EvidenceExtractor(config)
     
-    def analyze_article(self, zone_fragments: Dict[str, List[Dict]]) -> FramingResult:
+    def analyze_article(self, zone_fragments: Dict[str, List[Dict]], 
+                       omission_result=None) -> FramingResult:
         """分析单篇文章"""
         
         # Step 5: 计算结构区得分和指标
         zone_scores = self.scorer.compute_zone_scores(zone_fragments)
         structural_indicators = self.scorer.compute_structural_indicators(zone_fragments)
         
-        # Step 6: 计算framing强度
+        # Step 6: 计算framing强度（可能包含省略分数）
+        omission_score = omission_result.omission_score if omission_result else None
         framing_intensity = self.scorer.compute_framing_intensity(
-            zone_scores, structural_indicators
+            zone_scores, structural_indicators, omission_score
         )
         
         # Step 7: 生成伪标签（需要先拟合阈值）
@@ -305,10 +325,20 @@ class FramingAnalysisEngine:
             'zones_with_content': len([z for z, f in zone_fragments.items() if f])
         }
         
+        # 添加省略相关统计
+        if omission_result:
+            statistics.update({
+                'omission_score': omission_result.omission_score,
+                'key_topics_missing_count': len(omission_result.key_topics_missing),
+                'key_topics_covered_count': len(omission_result.key_topics_covered),
+                'omission_locations_count': len(omission_result.omission_locations)
+            })
+        
         raw_scores = {
             'zone_fragments': zone_fragments,
             'zone_scores': zone_scores,
-            'structural_indicators': structural_indicators
+            'structural_indicators': structural_indicators,
+            'omission_result': omission_result
         } if self.config.output.include_raw_scores else None
         
         return FramingResult(
@@ -317,6 +347,8 @@ class FramingAnalysisEngine:
             components=components,
             evidence=evidence,
             statistics=statistics,
+            omission_score=omission_score,
+            omission_evidence=omission_result.evidence if omission_result else None,
             raw_scores=raw_scores
         )
     

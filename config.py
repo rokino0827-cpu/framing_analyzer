@@ -125,6 +125,34 @@ class RelativeFramingConfig:
     ngram_range: tuple = (1, 2)
 
 @dataclass
+class OmissionConfig:
+    """省略感知配置（新增OmiGraph功能）"""
+    enabled: bool = False
+    
+    # 图构建配置
+    similarity_threshold: float = 0.5  # 跨文边相似度阈值
+    guidance_threshold: float = 0.3   # lede→narration引导边阈值
+    
+    # 省略检测配置
+    key_topics_count: int = 15        # 关键主题数量
+    min_topic_frequency: int = 2      # 主题最小频率
+    omission_weight_headline: float = 0.4  # headline省略权重
+    omission_weight_lede: float = 0.4      # lede省略权重
+    omission_weight_full: float = 0.2      # 全文省略权重
+    
+    # 证据提取配置
+    max_evidence_count: int = 5       # 最大证据数量
+    max_examples_per_evidence: int = 3 # 每个证据的最大例子数
+    
+    # 实体识别配置
+    use_spacy: bool = True           # 是否使用spaCy进行实体识别
+    entity_types: List[str] = None   # 关注的实体类型
+    
+    def __post_init__(self):
+        if self.entity_types is None:
+            self.entity_types = ['PERSON', 'ORG', 'GPE', 'EVENT']
+
+@dataclass
 class AnalyzerConfig:
     """主配置类"""
     processing: ProcessingConfig = None
@@ -132,6 +160,7 @@ class AnalyzerConfig:
     scoring: ScoringConfig = None
     output: OutputConfig = None
     relative_framing: RelativeFramingConfig = None
+    omission: OmissionConfig = None  # 新增省略感知配置
     
     # 全局配置
     random_seed: int = 42
@@ -149,6 +178,8 @@ class AnalyzerConfig:
             self.output = OutputConfig()
         if self.relative_framing is None:
             self.relative_framing = RelativeFramingConfig()
+        if self.omission is None:
+            self.omission = OmissionConfig()
 
 # 默认配置实例
 default_config = AnalyzerConfig()
@@ -164,8 +195,9 @@ def load_config(config_path: str) -> AnalyzerConfig:
         scoring=ScoringConfig(**config_dict.get('scoring', {})),
         output=OutputConfig(**config_dict.get('output', {})),
         relative_framing=RelativeFramingConfig(**config_dict.get('relative_framing', {})),
+        omission=OmissionConfig(**config_dict.get('omission', {})),
         **{k: v for k, v in config_dict.items() 
-           if k not in ['processing', 'teacher', 'scoring', 'output', 'relative_framing']}
+           if k not in ['processing', 'teacher', 'scoring', 'output', 'relative_framing', 'omission']}
     )
 
 def save_config(config: AnalyzerConfig, config_path: str):
@@ -178,6 +210,7 @@ def save_config(config: AnalyzerConfig, config_path: str):
         'scoring': asdict(config.scoring),
         'output': asdict(config.output),
         'relative_framing': asdict(config.relative_framing),
+        'omission': asdict(config.omission),
         'random_seed': config.random_seed,
         'verbose': config.verbose,
         'log_level': config.log_level

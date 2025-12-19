@@ -20,10 +20,16 @@ scipy>=1.7.0
 # 机器学习
 scikit-learn>=1.0.0,<2.0.0
 
+# 图结构处理（省略检测需要）
+networkx>=2.8.0
+
 # ===== 文本处理 =====
 regex>=2022.0.0
 nltk>=3.8.0
 spacy>=3.4.0
+
+# 语义相似度和嵌入（省略检测需要）
+sentence-transformers>=2.2.0
 
 # ===== 数据可视化 =====
 matplotlib>=3.5.0,<4.0.0
@@ -69,8 +75,7 @@ typing-extensions>=4.0.0
 
 # ===== 可选：高级功能 =====
 # 如果需要更高级的NLP功能
-# sentence-transformers>=2.2.0
-# spacy-transformers>=1.2.0
+spacy-transformers>=1.2.0
 
 # 如果需要更好的并行处理
 # joblib>=1.2.0

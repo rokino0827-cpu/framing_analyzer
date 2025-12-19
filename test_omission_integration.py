@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""
+测试省略检测功能集成的简单脚本
+"""
+
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+def test_imports():
+    """测试所有省略检测相关的导入"""
+    print("Testing imports...")
+    
+    try:
+        from framing_analyzer import (
+            OmissionDetector, OmissionResult, OmissionGraph, 
+            GraphNode, GraphEdge, OmissionAwareGraphBuilder,
+            OmissionConfig, create_omission_enabled_config
+        )
+        print("✓ All omission-related imports successful")
+        return True
+    except ImportError as e:
+        print(f"✗ Import error: {e}")
+        return False
+
+def test_config_creation():
+    """测试配置创建"""
+    print("Testing configuration creation...")
+    
+    try:
+        from framing_analyzer import create_omission_enabled_config, AnalyzerConfig
+        
+        # 测试默认配置
+        config = AnalyzerConfig()
+        print(f"✓ Default config created, has omission: {hasattr(config, 'omission')}")
+        
+        # 测试省略启用配置
+        omission_config = create_omission_enabled_config()
+        if hasattr(omission_config, 'omission'):
+            print(f"✓ Omission-enabled config created, enabled: {omission_config.omission.enabled}")
+        else:
+            print("✗ Omission config not found in omission-enabled config")
+            return False
+        
+        return True
+    except Exception as e:
+        print(f"✗ Configuration error: {e}")
+        return False
+
+def test_analyzer_creation():
+    """测试分析器创建"""
+    print("Testing analyzer creation...")
+    
+    try:
+        from framing_analyzer import create_analyzer
+        
+        # 测试默认分析器
+        analyzer = create_analyzer()
+        print(f"✓ Default analyzer created, has omission detector: {analyzer.omission_detector is not None}")
+        
+        # 测试启用省略检测的分析器
+        omission_analyzer = create_analyzer(enable_omission=True)
+        print(f"✓ Omission-enabled analyzer created, has omission detector: {omission_analyzer.omission_detector is not None}")
+        
+        return True
+    except Exception as e:
+        print(f"✗ Analyzer creation error: {e}")
+        return False
+
+def test_omission_components():
+    """测试省略检测组件"""
+    print("Testing omission detection components...")
+    
+    try:
+        from framing_analyzer.omission_detector import OmissionDetector
+        from framing_analyzer.omission_graph import OmissionAwareGraphBuilder
+        from framing_analyzer.config import OmissionConfig
+        
+        # 创建配置
+        config = OmissionConfig()
+        print(f"✓ OmissionConfig created with similarity_threshold: {config.similarity_threshold}")
+        
+        # 测试图构建器
+        graph_builder = OmissionAwareGraphBuilder(config)
+        print("✓ OmissionAwareGraphBuilder created")
+        
+        # 注意：不实际创建OmissionDetector，因为它需要模型加载
+        print("✓ Omission components structure validated")
+        
+        return True
+    except Exception as e:
+        print(f"✗ Omission components error: {e}")
+        return False
+
+def main():
+    """运行所有测试"""
+    print("=== Omission Detection Integration Test ===\n")
+    
+    tests = [
+        test_imports,
+        test_config_creation,
+        test_analyzer_creation,
+        test_omission_components
+    ]
+    
+    passed = 0
+    total = len(tests)
+    
+    for test in tests:
+        try:
+            if test():
+                passed += 1
+            print()
+        except Exception as e:
+            print(f"✗ Test failed with exception: {e}\n")
+    
+    print(f"=== Test Results: {passed}/{total} passed ===")
+    
+    if passed == total:
+        print("🎉 All tests passed! Omission detection integration is ready.")
+        return 0
+    else:
+        print("❌ Some tests failed. Please check the implementation.")
+        return 1
+
+if __name__ == "__main__":
+    sys.exit(main())

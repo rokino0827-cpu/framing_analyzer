@@ -15,6 +15,7 @@ from .text_processor import TextProcessor, StructureZoneExtractor, FragmentGener
 from .bias_teacher import TeacherInference
 from .framing_scorer import FramingAnalysisEngine, FramingResult
 from .relative_framing import RelativeFramingAnalyzer
+from .omission_detector import OmissionDetector
 from .utils import setup_logging, save_results, validate_input_data
 
 logger = logging.getLogger(__name__)
@@ -40,10 +41,22 @@ class FramingAnalyzer:
         if config.relative_framing.enabled:
             self.relative_analyzer = RelativeFramingAnalyzer(config)
         
+        # 可选的省略感知检测器
+        self.omission_detector = None
+        if config.omission.enabled:
+            self.omission_detector = OmissionDetector(config)
+        
         logger.info("FramingAnalyzer initialized successfully")
     
-    def analyze_article(self, content: str, title: str = "") -> FramingResult:
-        """分析单篇文章"""
+    def analyze_article(self, content: str, title: str = "", 
+                       event_cluster: Optional[List[Dict]] = None) -> FramingResult:
+        """分析单篇文章
+        
+        Args:
+            content: 文章内容
+            title: 文章标题
+            event_cluster: 同事件文章集群（用于省略检测）
+        """
         
         # Step 1 & 2: 文本预处理和结构区划分
         processed_article = self.text_processor.process_article(content, title)
@@ -57,6 +70,14 @@ class FramingAnalyzer:
         
         # Step 5-8: 框架分析
         result = self.framing_engine.analyze_article(zone_fragments)
+        
+        # Step 9: 省略检测（如果启用且有事件集群）
+        if self.omission_detector and event_cluster:
+            omission_result = self.omission_detector.detect_omissions(
+                processed_article, event_cluster
+            )
+            # 将省略结果集成到框架结果中
+            result = self.framing_engine.integrate_omission_results(result, omission_result)
         
         return result
     
@@ -76,6 +97,13 @@ class FramingAnalyzer:
         # 验证输入数据
         articles = validate_input_data(articles)
         
+        # 事件聚类（如果启用省略检测）
+        event_clusters = {}
+        if self.omission_detector:
+            logger.info("Performing event clustering for omission detection")
+            event_clusters = self.omission_detector.cluster_articles_by_event(articles)
+            logger.info(f"Created {len(event_clusters)} event clusters")
+        
         # 单轮推理：完整分析所有文章
         logger.info("Single pass: Complete analysis for all articles")
         results = []
@@ -83,7 +111,19 @@ class FramingAnalyzer:
         
         for i, article in enumerate(tqdm(articles, desc="Analyzing articles")):
             try:
-                result = self.analyze_article(article['content'], article.get('title', ''))
+                # 获取该文章的事件集群
+                event_cluster = None
+                if self.omission_detector:
+                    for cluster_articles in event_clusters.values():
+                        if any(a.get('id') == article.get('id') for a in cluster_articles):
+                            event_cluster = cluster_articles
+                            break
+                
+                result = self.analyze_article(
+                    article['content'], 
+                    article.get('title', ''),
+                    event_cluster
+                )
                 
                 # 收集framing分数用于阈值拟合
                 framing_scores.append(result.framing_intensity)
@@ -203,6 +243,12 @@ class FramingAnalyzer:
         if self.config.output.include_raw_scores and result.raw_scores:
             formatted['raw_scores'] = result.raw_scores
         
+        # 添加省略检测结果
+        if hasattr(result, 'omission_score') and result.omission_score is not None:
+            formatted['omission_score'] = result.omission_score
+            if self.config.output.include_evidence and hasattr(result, 'omission_evidence'):
+                formatted['omission_evidence'] = result.omission_evidence
+        
         # 添加文章元数据
         for key, value in article.items():
             if key not in ['content', 'title', 'id']:
@@ -269,18 +315,39 @@ class FramingAnalyzer:
                     }
             stats['components'] = component_stats
         
+        # 省略检测统计（如果包含）
+        if 'omission_score' in valid_results[0]:
+            omission_scores = [r['omission_score'] for r in valid_results 
+                             if 'omission_score' in r and r['omission_score'] is not None]
+            if omission_scores:
+                stats['omission_detection'] = {
+                    'mean': np.mean(omission_scores),
+                    'std': np.std(omission_scores),
+                    'min': np.min(omission_scores),
+                    'max': np.max(omission_scores),
+                    'median': np.median(omission_scores),
+                    'articles_with_omissions': len([s for s in omission_scores if s > 0.5]),
+                    'omission_rate': len([s for s in omission_scores if s > 0.5]) / len(omission_scores) * 100
+                }
+        
         return stats
     
     def _serialize_config(self) -> Dict:
         """序列化配置"""
         from dataclasses import asdict
-        return {
+        config_dict = {
             'processing': asdict(self.config.processing),
             'teacher': asdict(self.config.teacher),
             'scoring': asdict(self.config.scoring),
             'output': asdict(self.config.output),
             'relative_framing': asdict(self.config.relative_framing)
         }
+        
+        # 添加省略检测配置（如果存在）
+        if hasattr(self.config, 'omission'):
+            config_dict['omission'] = asdict(self.config.omission)
+        
+        return config_dict
     
     def get_model_info(self) -> Dict:
         """获取模型信息"""
