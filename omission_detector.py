@@ -23,6 +23,16 @@ class OmissionDetector:
         
         # 复用TextProcessor实例，避免重复创建
         self.text_processor = None
+    
+    def _split_sentences(self, text: str):
+        """兼容TextProcessor.split_sentences的不同返回格式"""
+        if self.text_processor is None:
+            from .text_processor import TextProcessor
+            self.text_processor = TextProcessor(self.config)
+        
+        res = self.text_processor.split_sentences(text)
+        # 兼容返回tuple或list两种格式
+        return res[0] if isinstance(res, tuple) else res
         
         # TF-IDF向量化器用于主题提取
         self.tfidf_vectorizer = TfidfVectorizer(
@@ -210,7 +220,8 @@ class OmissionDetector:
             # 选择top主题，保持稳定排序
             max_topics = self.config.omission.key_topics_count * 2  # 取更多候选主题
             top_indices = np.argsort(topic_scores)[-max_topics:]
-            key_topics_with_scores = [(feature_names[i], topic_scores[i]) for i in top_indices if topic_scores[i] > 0.1]
+            # 降低阈值避免小簇时key_topics为空
+            key_topics_with_scores = [(feature_names[i], topic_scores[i]) for i in top_indices if topic_scores[i] > 0.05]
             
             # 按分数降序排序，分数相同时按字母序排序（保证稳定性）
             key_topics_with_scores.sort(key=lambda x: (-x[1], x[0]))
@@ -278,10 +289,7 @@ class OmissionDetector:
             content = article.get('content', '').lower()
             
             # 使用TextProcessor进行句子切分
-            if self.text_processor is None:
-                from .text_processor import TextProcessor
-                self.text_processor = TextProcessor(self.config)
-            sentences, _ = self.text_processor.split_sentences(content)
+            sentences = self._split_sentences(content)
             
             # 估算lede（前4句）
             lede_sentences = sentences[:4] if sentences else []
@@ -355,7 +363,8 @@ class OmissionDetector:
         try:
             # 找到其他文章中覆盖这些主题的片段
             for omitted_topic in omissions[:5]:  # 限制数量
-                supporting_fragments = self._find_supporting_fragments(omitted_topic, cluster, article['id'])
+                exclude_id = article.get('id')
+                supporting_fragments = self._find_supporting_fragments(omitted_topic, cluster, exclude_id)
                 
                 if supporting_fragments:
                     # 统计唯一文章数而非片段数
@@ -379,36 +388,6 @@ class OmissionDetector:
             logger.error(f"Failed to extract omission evidence: {e}")
             return []
     
-    def _extract_article_topics_from_processed(self, processed_article) -> List[str]:
-        """从ProcessedArticle提取文章主题"""
-        try:
-            # 合并标题和内容
-            text_parts = []
-            if processed_article.title:
-                text_parts.append(processed_article.title)
-            if processed_article.content:
-                text_parts.append(processed_article.content)
-            
-            full_text = ' '.join(text_parts)
-            
-            # 使用实体提取器
-            entities = self.entity_extractor.extract_entities(full_text)
-            
-            # 简单的关键词提取
-            import re
-            words = re.findall(r'\b[a-zA-Z]{3,}\b', full_text.lower())
-            word_counts = Counter(words)
-            
-            # 过滤停用词
-            stop_words = {'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by'}
-            keywords = [word for word, count in word_counts.most_common(20) if word not in stop_words]
-            
-            return list(set(entities + keywords))
-            
-        except Exception as e:
-            logger.error(f"Failed to extract article topics: {e}")
-            return []
-
     def _extract_article_topics(self, article: Dict) -> List[str]:
         """提取文章主题"""
         try:
@@ -485,10 +464,7 @@ class OmissionDetector:
             content = article.get('content', '')
             
             # 使用TextProcessor进行句子切分
-            if self.text_processor is None:
-                from .text_processor import TextProcessor
-                self.text_processor = TextProcessor(self.config)
-            sentences, _ = self.text_processor.split_sentences(content)
+            sentences = self._split_sentences(content)
             
             # 估算不同区域
             lede = ' '.join(sentences[:4]).lower() if sentences else ''
@@ -602,11 +578,7 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                if self.text_processor is None:
-                    from .text_processor import TextProcessor
-                    self.text_processor = TextProcessor(self.config)
-                sentences, _ = self.text_processor.split_sentences(content)
-                sentences = sentences[:6]  # 前6句
+                sentences = self._split_sentences(content)[:6]  # 前6句
                 
                 for i, sentence in enumerate(sentences):
                     if topic.lower() in sentence.lower():
@@ -643,11 +615,7 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                if self.text_processor is None:
-                    from .text_processor import TextProcessor
-                    self.text_processor = TextProcessor(self.config)
-                sentences, _ = self.text_processor.split_sentences(content)
-                sentences = sentences[:6]  # 前6句
+                sentences = self._split_sentences(content)[:6]  # 前6句
                 
                 for i, sentence in enumerate(sentences):
                     if topic.lower() in sentence.lower():
