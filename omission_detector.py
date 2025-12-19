@@ -144,24 +144,21 @@ class OmissionDetector:
             # Step 1: 识别簇内关键主题
             key_topics = self.identify_key_topics(cluster)
             
-            # Step 2: 分析当前文章的主题覆盖
-            article_topics = self._extract_article_topics_from_processed(processed_article)
-            
-            # Step 3: 计算省略分数
+            # Step 2: 计算省略分数
             omission_score = self.compute_omission_score_from_processed(processed_article, key_topics)
             
-            # Step 4: 识别缺失和覆盖的主题（基于文本覆盖而非列表成员关系）
+            # Step 3: 识别缺失和覆盖的主题（基于文本覆盖而非列表成员关系）
             full_text = (processed_article.title or "") + " " + (processed_article.content or "")
             key_topics_missing = [topic for topic in key_topics if not self._topic_in_text(full_text, topic)]
             key_topics_covered = [topic for topic in key_topics if self._topic_in_text(full_text, topic)]
             
-            # Step 5: 分析省略位置
+            # Step 4: 分析省略位置
             omission_locations = self._analyze_omission_locations_from_processed(processed_article, key_topics_missing)
             
-            # Step 6: 生成省略证据
+            # Step 5: 生成省略证据
             evidence = self.extract_omission_evidence_from_processed(processed_article, key_topics_missing, cluster, article_id)
             
-            # Step 7: 计算簇内主题覆盖率
+            # Step 6: 计算簇内主题覆盖率
             cluster_coverage = self._compute_cluster_coverage(cluster, key_topics)
             
             return OmissionResult(
@@ -329,6 +326,10 @@ class OmissionDetector:
                 if supporting_fragments:
                     # 统计唯一文章数而非片段数
                     unique_article_ids = {f['article_id'] for f in supporting_fragments}
+                    
+                    # 按relevance排序后截断，保证展示最相关的例子
+                    supporting_fragments.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+                    
                     evidence_item = {
                         'omitted_topic': omitted_topic,
                         'evidence_type': 'omission',
@@ -357,12 +358,18 @@ class OmissionDetector:
                 supporting_fragments = self._find_supporting_fragments(omitted_topic, cluster, article['id'])
                 
                 if supporting_fragments:
+                    # 统计唯一文章数而非片段数
+                    unique_article_ids = {f['article_id'] for f in supporting_fragments}
+                    
+                    # 按relevance排序后截断，保证展示最相关的例子
+                    supporting_fragments.sort(key=lambda x: x.get('relevance', 0), reverse=True)
+                    
                     evidence_item = {
                         'omitted_topic': omitted_topic,
                         'evidence_type': 'omission',
-                        'supporting_articles': len(supporting_fragments),
+                        'supporting_articles': len(unique_article_ids),
                         'examples': supporting_fragments[:3],  # 最多3个例子
-                        'coverage_rate': len(supporting_fragments) / max(1, len(cluster) - 1)
+                        'coverage_rate': len(unique_article_ids) / max(1, len(cluster) - 1)
                     }
                     evidence.append(evidence_item)
             
@@ -618,14 +625,15 @@ class OmissionDetector:
         supporting_fragments = []
         
         for article in cluster:
-            if article['id'] == exclude_article_id:
+            article_id = article.get('id')
+            if article_id is not None and article_id == exclude_article_id:
                 continue
             
             # 检查标题
             title = article.get('title', '')
             if topic.lower() in title.lower():
                 supporting_fragments.append({
-                    'article_id': article['id'],
+                    'article_id': article.get('id', 'unknown'),
                     'text': title,
                     'location': 'headline',
                     'relevance': 1.0
@@ -644,7 +652,7 @@ class OmissionDetector:
                 for i, sentence in enumerate(sentences):
                     if topic.lower() in sentence.lower():
                         supporting_fragments.append({
-                            'article_id': article['id'],
+                            'article_id': article.get('id', 'unknown'),
                             'text': sentence.strip(),
                             'location': 'lede' if i < 4 else 'narration',
                             'relevance': 0.8 if i < 4 else 0.6
@@ -672,7 +680,7 @@ class OmissionDetector:
                 
                 full_text = ' '.join(text_parts).lower()
                 
-                if topic.lower() in full_text:
+                if self._topic_in_text(full_text, topic):
                     covered_articles += 1
             
             coverage[topic] = covered_articles / len(cluster) if cluster else 0.0
