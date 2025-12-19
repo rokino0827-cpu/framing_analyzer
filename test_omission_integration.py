@@ -54,13 +54,18 @@ def test_analyzer_creation():
     try:
         from framing_analyzer import create_analyzer
         
-        # 测试默认分析器
+        # 测试默认分析器（期望omission默认关闭）
         analyzer = create_analyzer()
-        print(f"✓ Default analyzer created, has omission detector: {analyzer.omission_detector is not None}")
+        omission_enabled = analyzer.omission_detector is not None
+        print(f"✓ Default analyzer created, omission detector enabled: {omission_enabled}")
         
         # 测试启用省略检测的分析器
         omission_analyzer = create_analyzer(enable_omission=True)
-        print(f"✓ Omission-enabled analyzer created, has omission detector: {omission_analyzer.omission_detector is not None}")
+        omission_enabled = omission_analyzer.omission_detector is not None
+        print(f"✓ Omission-enabled analyzer created, omission detector enabled: {omission_enabled}")
+        if not omission_enabled:
+            print("✗ Expected omission detector to be enabled")
+            return False
         
         # 测试analyze_article方法签名
         import inspect
@@ -99,7 +104,7 @@ def test_omission_components():
         full_config = AnalyzerConfig()
         full_config.omission.enabled = True
         
-        # 注意：不实际创建OmissionDetector，因为它需要模型加载
+        # 注意：不实际创建OmissionDetector，因为它需要spacy模型加载
         # 但可以检查方法是否存在
         import inspect
         detector_methods = [method for method in dir(OmissionDetector) if not method.startswith('_')]
@@ -107,6 +112,12 @@ def test_omission_components():
             print("✓ cluster_articles_by_event method found")
         else:
             print("✗ cluster_articles_by_event method missing")
+            return False
+        
+        if 'detect_omissions' in detector_methods:
+            print("✓ detect_omissions method found")
+        else:
+            print("✗ detect_omissions method missing")
             return False
         
         print("✓ Omission components structure validated")

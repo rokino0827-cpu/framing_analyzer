@@ -21,13 +21,16 @@ class OmissionDetector:
         self.graph_builder = OmissionAwareGraphBuilder(config)
         self.entity_extractor = EntityExtractor(self.graph_builder.nlp)
         
+        # 复用TextProcessor实例，避免重复创建
+        self.text_processor = None
+        
         # TF-IDF向量化器用于主题提取
         self.tfidf_vectorizer = TfidfVectorizer(
             max_features=100,
             ngram_range=(1, 2),
             stop_words='english',
             lowercase=True,
-            min_df=2
+            min_df=1  # 改为1，避免小簇时空词表
         )
     
     def cluster_articles_by_event(self, articles: List[Dict]) -> Dict[str, List[Dict]]:
@@ -75,22 +78,40 @@ class OmissionDetector:
             distance_threshold = 1 - self.config.omission.similarity_threshold
             
             try:
-                # 尝试使用distance_threshold（sklearn >= 0.24）
+                # 尝试使用distance_threshold + metric（sklearn >= 0.24）
                 clustering = AgglomerativeClustering(
                     n_clusters=None,
                     distance_threshold=distance_threshold,
                     metric='precomputed',
-                    linkage='average'
+                    linkage='average',
+                    compute_full_tree=True
                 )
             except TypeError:
-                # 回退到固定簇数（sklearn < 0.24）
-                n_clusters = min(max(2, len(valid_articles) // 3), len(valid_articles))
-                clustering = AgglomerativeClustering(
-                    n_clusters=n_clusters,
-                    metric='precomputed',
-                    linkage='average'
-                )
-                logger.warning(f"Using fixed n_clusters={n_clusters} due to sklearn version compatibility")
+                try:
+                    # 尝试使用affinity（sklearn旧版本）
+                    clustering = AgglomerativeClustering(
+                        n_clusters=None,
+                        distance_threshold=distance_threshold,
+                        affinity='precomputed',
+                        linkage='average',
+                        compute_full_tree=True
+                    )
+                except TypeError:
+                    # 最终回退到固定簇数
+                    n_clusters = min(max(2, len(valid_articles) // 3), len(valid_articles))
+                    try:
+                        clustering = AgglomerativeClustering(
+                            n_clusters=n_clusters,
+                            metric='precomputed',
+                            linkage='average'
+                        )
+                    except TypeError:
+                        clustering = AgglomerativeClustering(
+                            n_clusters=n_clusters,
+                            affinity='precomputed',
+                            linkage='average'
+                        )
+                    logger.warning(f"Using fixed n_clusters={n_clusters} due to sklearn version compatibility")
             
             cluster_labels = clustering.fit_predict(distance_matrix)
             
@@ -129,15 +150,16 @@ class OmissionDetector:
             # Step 3: 计算省略分数
             omission_score = self.compute_omission_score_from_processed(processed_article, key_topics)
             
-            # Step 4: 识别缺失和覆盖的主题
-            key_topics_missing = [topic for topic in key_topics if topic not in article_topics]
-            key_topics_covered = [topic for topic in key_topics if topic in article_topics]
+            # Step 4: 识别缺失和覆盖的主题（基于文本覆盖而非列表成员关系）
+            full_text = (processed_article.title or "") + " " + (processed_article.content or "")
+            key_topics_missing = [topic for topic in key_topics if not self._topic_in_text(full_text, topic)]
+            key_topics_covered = [topic for topic in key_topics if self._topic_in_text(full_text, topic)]
             
             # Step 5: 分析省略位置
             omission_locations = self._analyze_omission_locations_from_processed(processed_article, key_topics_missing)
             
             # Step 6: 生成省略证据
-            evidence = self.extract_omission_evidence_from_processed(processed_article, key_topics_missing, cluster)
+            evidence = self.extract_omission_evidence_from_processed(processed_article, key_topics_missing, cluster, article_id)
             
             # Step 7: 计算簇内主题覆盖率
             cluster_coverage = self._compute_cluster_coverage(cluster, key_topics)
@@ -185,8 +207,8 @@ class OmissionDetector:
             tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_texts)
             feature_names = self.tfidf_vectorizer.get_feature_names_out()
             
-            # 计算每个主题在簇中的重要性
-            topic_scores = np.mean(tfidf_matrix.toarray(), axis=0)
+            # 计算每个主题在簇中的重要性（稀疏矩阵友好）
+            topic_scores = np.asarray(tfidf_matrix.mean(axis=0)).ravel()
             
             # 选择top主题，保持稳定排序
             max_topics = self.config.omission.key_topics_count * 2  # 取更多候选主题
@@ -259,9 +281,10 @@ class OmissionDetector:
             content = article.get('content', '').lower()
             
             # 使用TextProcessor进行句子切分
-            from .text_processor import TextProcessor
-            text_processor = TextProcessor(self.config)
-            sentences, _ = text_processor.split_sentences(content)
+            if self.text_processor is None:
+                from .text_processor import TextProcessor
+                self.text_processor = TextProcessor(self.config)
+            sentences, _ = self.text_processor.split_sentences(content)
             
             # 估算lede（前4句）
             lede_sentences = sentences[:4] if sentences else []
@@ -291,7 +314,7 @@ class OmissionDetector:
             logger.error(f"Failed to compute omission score: {e}")
             return 0.0
     
-    def extract_omission_evidence_from_processed(self, processed_article, omissions: List[str], cluster: List[Dict]) -> List[Dict]:
+    def extract_omission_evidence_from_processed(self, processed_article, omissions: List[str], cluster: List[Dict], article_id: str) -> List[Dict]:
         """从ProcessedArticle提取省略证据"""
         evidence = []
         
@@ -301,17 +324,17 @@ class OmissionDetector:
         try:
             # 找到其他文章中覆盖这些主题的片段
             for omitted_topic in omissions[:self.config.omission.max_evidence_count]:  # 使用配置限制数量
-                # 需要一个标识符来排除当前文章，使用title作为简单标识
-                current_article_title = processed_article.title if processed_article.title else ""
-                supporting_fragments = self._find_supporting_fragments_exclude_title(omitted_topic, cluster, current_article_title)
+                supporting_fragments = self._find_supporting_fragments(omitted_topic, cluster, article_id)
                 
                 if supporting_fragments:
+                    # 统计唯一文章数而非片段数
+                    unique_article_ids = {f['article_id'] for f in supporting_fragments}
                     evidence_item = {
                         'omitted_topic': omitted_topic,
                         'evidence_type': 'omission',
-                        'supporting_articles': len(supporting_fragments),
+                        'supporting_articles': len(unique_article_ids),
                         'examples': supporting_fragments[:self.config.omission.max_examples_per_evidence],  # 使用配置限制例子数量
-                        'coverage_rate': len(supporting_fragments) / max(1, len(cluster) - 1)
+                        'coverage_rate': len(unique_article_ids) / max(1, len(cluster) - 1)
                     }
                     evidence.append(evidence_item)
             
@@ -455,9 +478,10 @@ class OmissionDetector:
             content = article.get('content', '')
             
             # 使用TextProcessor进行句子切分
-            from .text_processor import TextProcessor
-            text_processor = TextProcessor(self.config)
-            sentences, _ = text_processor.split_sentences(content)
+            if self.text_processor is None:
+                from .text_processor import TextProcessor
+                self.text_processor = TextProcessor(self.config)
+            sentences, _ = self.text_processor.split_sentences(content)
             
             # 估算不同区域
             lede = ' '.join(sentences[:4]).lower() if sentences else ''
@@ -482,6 +506,23 @@ class OmissionDetector:
             logger.error(f"Failed to analyze omission locations: {e}")
             return []
     
+    def _topic_in_text(self, text: str, topic: str) -> bool:
+        """判断主题是否在文本中（支持短语和单词边界匹配）"""
+        import re
+        if not text or not topic:
+            return False
+        
+        text_lower = text.lower()
+        topic_lower = topic.lower()
+        
+        if ' ' in topic_lower:
+            # 多词主题，直接搜索
+            return topic_lower in text_lower
+        else:
+            # 单词主题，使用词边界
+            pattern = r'\b' + re.escape(topic_lower) + r'\b'
+            return re.search(pattern, text_lower) is not None
+
     def _compute_topic_coverage(self, text: str, topics: List[str]) -> float:
         """计算文本对主题的覆盖率"""
         if not topics or not text:
@@ -554,9 +595,10 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                from .text_processor import TextProcessor
-                text_processor = TextProcessor(self.config)
-                sentences, _ = text_processor.split_sentences(content)
+                if self.text_processor is None:
+                    from .text_processor import TextProcessor
+                    self.text_processor = TextProcessor(self.config)
+                sentences, _ = self.text_processor.split_sentences(content)
                 sentences = sentences[:6]  # 前6句
                 
                 for i, sentence in enumerate(sentences):
@@ -593,9 +635,10 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                from .text_processor import TextProcessor
-                text_processor = TextProcessor(self.config)
-                sentences, _ = text_processor.split_sentences(content)
+                if self.text_processor is None:
+                    from .text_processor import TextProcessor
+                    self.text_processor = TextProcessor(self.config)
+                sentences, _ = self.text_processor.split_sentences(content)
                 sentences = sentences[:6]  # 前6句
                 
                 for i, sentence in enumerate(sentences):
