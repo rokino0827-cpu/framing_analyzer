@@ -4,8 +4,8 @@
 """
 
 import numpy as np
-from typing import List, Dict, Tuple, Optional, Set
-from collections import Counter, defaultdict
+from typing import List, Dict, Optional
+from collections import Counter
 import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -33,8 +33,8 @@ class OmissionDetector:
             min_df=1  # 改为1，避免小簇时空词表
         )
     
-    def _split_sentences(self, text: str):
-        """兼容TextProcessor.split_sentences的不同返回格式"""
+    def _split_sentences(self, text: str) -> List[str]:
+        """兼容TextProcessor.split_sentences的不同返回格式；保证返回list"""
         if not text:
             return []
             
@@ -43,8 +43,8 @@ class OmissionDetector:
             self.text_processor = TextProcessor(self.config)
         
         res = self.text_processor.split_sentences(text)
-        # 兼容返回tuple或list两种格式
-        return res[0] if isinstance(res, tuple) else res
+        sentences = res[0] if isinstance(res, tuple) else res
+        return sentences or []
     
     def cluster_articles_by_event(self, articles: List[Dict]) -> Dict[str, List[Dict]]:
         """
@@ -260,7 +260,7 @@ class OmissionDetector:
             # 计算各区域的主题覆盖率（_compute_topic_coverage内部会处理大小写）
             headline_coverage = self._compute_topic_coverage(title, key_topics)
             lede_coverage = self._compute_topic_coverage(lede, key_topics)
-            full_coverage = self._compute_topic_coverage(content.lower(), key_topics)
+            full_coverage = self._compute_topic_coverage(content, key_topics)
             
             # 加权计算省略分数
             # 重点关注headline和lede的省略
@@ -301,7 +301,7 @@ class OmissionDetector:
             # 计算各区域的主题覆盖率
             headline_coverage = self._compute_topic_coverage(title, key_topics)
             lede_coverage = self._compute_topic_coverage(lede, key_topics)
-            full_coverage = self._compute_topic_coverage(content.lower(), key_topics)
+            full_coverage = self._compute_topic_coverage(content, key_topics)
             
             # 加权计算省略分数
             # 重点关注headline和lede的省略
@@ -429,24 +429,22 @@ class OmissionDetector:
             return locations
         
         try:
-            title = processed_article.title.lower() if processed_article.title else ""
+            title = processed_article.title if processed_article.title else ""
             
             # 使用已经切分好的句子
             sentences = processed_article.sentences
-            lede = ' '.join(sentences[:4]).lower() if sentences else ''
-            narration = ' '.join(sentences[4:]).lower() if len(sentences) > 4 else ''
+            lede = ' '.join(sentences[:4]) if sentences else ''
+            narration = ' '.join(sentences[4:]) if len(sentences) > 4 else ''
             
             # 检查每个区域是否缺失关键主题
             for topic in missing_topics[:self.config.omission.max_evidence_count]:  # 使用配置限制检查数量
-                topic_lower = topic.lower()
-                
-                if topic_lower not in title:
+                if not self._topic_in_text(title, topic):
                     locations.append('headline')
                 
-                if topic_lower not in lede:
+                if not self._topic_in_text(lede, topic):
                     locations.append('lede')
                 
-                if topic_lower not in narration:
+                if not self._topic_in_text(narration, topic):
                     locations.append('narration')
             
             return list(set(locations))
@@ -463,27 +461,25 @@ class OmissionDetector:
             return locations
         
         try:
-            title = article.get('title', '').lower()
+            title = article.get('title', '')
             content = article.get('content', '')
             
             # 使用TextProcessor进行句子切分
             sentences = self._split_sentences(content)
             
             # 估算不同区域
-            lede = ' '.join(sentences[:4]).lower() if sentences else ''
-            narration = ' '.join(sentences[4:]).lower() if len(sentences) > 4 else ''
+            lede = ' '.join(sentences[:4]) if sentences else ''
+            narration = ' '.join(sentences[4:]) if len(sentences) > 4 else ''
             
             # 检查每个区域是否缺失关键主题
             for topic in missing_topics[:self.config.omission.max_evidence_count]:  # 使用配置限制检查数量
-                topic_lower = topic.lower()
-                
-                if topic_lower not in title:
+                if not self._topic_in_text(title, topic):
                     locations.append('headline')
                 
-                if topic_lower not in lede:
+                if not self._topic_in_text(lede, topic):
                     locations.append('lede')
                 
-                if topic_lower not in narration:
+                if not self._topic_in_text(narration, topic):
                     locations.append('narration')
             
             return list(set(locations))
@@ -569,7 +565,7 @@ class OmissionDetector:
             
             # 检查标题
             title = article.get('title', '')
-            if topic.lower() in title.lower():
+            if self._topic_in_text(title, topic):
                 supporting_fragments.append({
                     'article_id': article.get('id', 'unknown'),
                     'text': title,
@@ -581,10 +577,11 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                sentences = self._split_sentences(content)[:6]  # 前6句
+                sentences = self._split_sentences(content)
+                sentences = sentences[:6] if sentences else []  # 前6句
                 
                 for i, sentence in enumerate(sentences):
-                    if topic.lower() in sentence.lower():
+                    if self._topic_in_text(sentence, topic):
                         supporting_fragments.append({
                             'article_id': article.get('id', 'unknown'),
                             'text': sentence.strip(),
@@ -606,7 +603,7 @@ class OmissionDetector:
             
             # 检查标题
             title = article.get('title', '')
-            if topic.lower() in title.lower():
+            if self._topic_in_text(title, topic):
                 supporting_fragments.append({
                     'article_id': article.get('id', 'unknown'),
                     'text': title,
@@ -618,10 +615,11 @@ class OmissionDetector:
             content = article.get('content', '')
             if content:
                 # 使用TextProcessor进行句子切分
-                sentences = self._split_sentences(content)[:6]  # 前6句
+                sentences = self._split_sentences(content)
+                sentences = sentences[:6] if sentences else []  # 前6句
                 
                 for i, sentence in enumerate(sentences):
-                    if topic.lower() in sentence.lower():
+                    if self._topic_in_text(sentence, topic):
                         supporting_fragments.append({
                             'article_id': article.get('id', 'unknown'),
                             'text': sentence.strip(),
@@ -649,7 +647,7 @@ class OmissionDetector:
                 if article.get('content'):
                     text_parts.append(article['content'])
                 
-                full_text = ' '.join(text_parts).lower()
+                full_text = ' '.join(text_parts)
                 
                 if self._topic_in_text(full_text, topic):
                     covered_articles += 1
