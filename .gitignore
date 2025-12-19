@@ -1,0 +1,11 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Data / outputs (adjust if needed)
+data/
+results/
+bias_detector_data/
+
+# Tooling/temp
+.spec-workflow/
