@@ -84,7 +84,21 @@ def test_omission_components():
         graph_builder = OmissionAwareGraphBuilder(config)
         print("✓ OmissionAwareGraphBuilder created")
         
+        # 测试聚类方法存在
+        from framing_analyzer.config import AnalyzerConfig
+        full_config = AnalyzerConfig()
+        full_config.omission.enabled = True
+        
         # 注意：不实际创建OmissionDetector，因为它需要模型加载
+        # 但可以检查方法是否存在
+        import inspect
+        detector_methods = [method for method in dir(OmissionDetector) if not method.startswith('_')]
+        if 'cluster_articles_by_event' in detector_methods:
+            print("✓ cluster_articles_by_event method found")
+        else:
+            print("✗ cluster_articles_by_event method missing")
+            return False
+        
         print("✓ Omission components structure validated")
         
         return True

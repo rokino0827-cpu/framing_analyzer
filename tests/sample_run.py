@@ -43,7 +43,9 @@ def main():
     if not data_path.exists():
         raise FileNotFoundError(f"未找到数据文件: {data_path}")
 
-    cfg = default_config
+    # 使用深拷贝避免修改全局单例
+    import copy
+    cfg = copy.deepcopy(default_config)
     cfg.output.output_dir = "results/test_sample"
 
     articles = load_sample_articles(data_path, max_rows=3)

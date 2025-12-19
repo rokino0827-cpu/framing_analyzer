@@ -68,16 +68,15 @@ class FramingAnalyzer:
         # Step 4: Teacher推理
         zone_fragments = self.teacher_inference.process_article_fragments(fragments)
         
-        # Step 5-8: 框架分析
-        result = self.framing_engine.analyze_article(zone_fragments)
-        
         # Step 9: 省略检测（如果启用且有事件集群）
+        omission_result = None
         if self.omission_detector and event_cluster:
             omission_result = self.omission_detector.detect_omissions(
                 processed_article, event_cluster
             )
-            # 将省略结果集成到框架结果中
-            result = self.framing_engine.integrate_omission_results(result, omission_result)
+        
+        # Step 5-8: 框架分析（包含省略结果）
+        result = self.framing_engine.analyze_article(zone_fragments, omission_result=omission_result)
         
         return result
     
@@ -99,10 +98,16 @@ class FramingAnalyzer:
         
         # 事件聚类（如果启用省略检测）
         event_clusters = {}
+        article_to_cluster = {}  # 文章ID到集群的映射
         if self.omission_detector:
             logger.info("Performing event clustering for omission detection")
             event_clusters = self.omission_detector.cluster_articles_by_event(articles)
             logger.info(f"Created {len(event_clusters)} event clusters")
+            
+            # 构建文章ID到集群的映射，避免O(N²)查找
+            for cluster_id, cluster_articles in event_clusters.items():
+                for article in cluster_articles:
+                    article_to_cluster[article.get('id')] = cluster_articles
         
         # 单轮推理：完整分析所有文章
         logger.info("Single pass: Complete analysis for all articles")
@@ -114,10 +119,7 @@ class FramingAnalyzer:
                 # 获取该文章的事件集群
                 event_cluster = None
                 if self.omission_detector:
-                    for cluster_articles in event_clusters.values():
-                        if any(a.get('id') == article.get('id') for a in cluster_articles):
-                            event_cluster = cluster_articles
-                            break
+                    event_cluster = article_to_cluster.get(article.get('id'))
                 
                 result = self.analyze_article(
                     article['content'], 

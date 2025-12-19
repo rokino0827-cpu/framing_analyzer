@@ -93,6 +93,33 @@ class BiasTeacher:
         # 按原始顺序返回
         return [idx_to_result[i] for i in range(len(original_fragments))]
     
+    def _get_bias_class_index(self) -> int:
+        """动态推断bias类的索引"""
+        if not hasattr(self, '_bias_class_idx'):
+            # 从模型配置中获取标签映射
+            if hasattr(self.model.config, 'id2label'):
+                id2label = self.model.config.id2label
+                
+                # 查找包含"bias"或"biased"的标签
+                for idx, label in id2label.items():
+                    if any(keyword in label.lower() for keyword in ['bias', 'biased']):
+                        self._bias_class_idx = int(idx)
+                        logger.info(f"Found bias class at index {idx}: {label}")
+                        return self._bias_class_idx
+                
+                # 如果没找到，查找包含"positive"的标签（通常bias是positive类）
+                for idx, label in id2label.items():
+                    if 'positive' in label.lower():
+                        self._bias_class_idx = int(idx)
+                        logger.warning(f"Using positive class as bias class at index {idx}: {label}")
+                        return self._bias_class_idx
+            
+            # 默认使用索引1
+            self._bias_class_idx = 1
+            logger.warning("Could not determine bias class index, using default index 1")
+        
+        return self._bias_class_idx
+    
     def _predict_batch(self, batch: List[Dict]) -> List[Dict]:
         """预测一个batch的片段"""
         texts = [fragment['text'] for fragment in batch]
@@ -116,7 +143,10 @@ class BiasTeacher:
             
             # 计算概率
             probabilities = torch.softmax(logits, dim=-1)
-            bias_scores = probabilities[:, 1].cpu().numpy()  # 假设索引1是bias类
+            
+            # 动态推断bias类的索引
+            bias_class_idx = self._get_bias_class_index()
+            bias_scores = probabilities[:, bias_class_idx].cpu().numpy()
             
             # 批量计算confidence并转移到CPU (P1优化: 避免逐个转移)
             all_confidences = torch.max(probabilities, dim=-1)[0].cpu().numpy()

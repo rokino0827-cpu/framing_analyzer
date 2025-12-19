@@ -30,6 +30,79 @@ class OmissionDetector:
             min_df=2
         )
     
+    def cluster_articles_by_event(self, articles: List[Dict]) -> Dict[str, List[Dict]]:
+        """
+        对文章进行事件聚类
+        复用 TF-IDF 标题相似度聚类逻辑
+        """
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.cluster import AgglomerativeClustering
+        import numpy as np
+        
+        if len(articles) <= 1:
+            return {"cluster_0": articles}
+        
+        # 提取标题
+        titles = [article.get('title', '') for article in articles]
+        
+        # 过滤空标题
+        valid_indices = [i for i, title in enumerate(titles) if title.strip()]
+        if len(valid_indices) <= 1:
+            return {"cluster_0": articles}
+        
+        valid_titles = [titles[i] for i in valid_indices]
+        valid_articles = [articles[i] for i in valid_indices]
+        
+        # TF-IDF 向量化
+        vectorizer = TfidfVectorizer(
+            max_features=1000,
+            stop_words='english',
+            ngram_range=(1, 2),
+            min_df=1
+        )
+        
+        try:
+            tfidf_matrix = vectorizer.fit_transform(valid_titles)
+            
+            # 计算相似度矩阵
+            similarity_matrix = cosine_similarity(tfidf_matrix)
+            
+            # 转换为距离矩阵
+            distance_matrix = 1 - similarity_matrix
+            
+            # 层次聚类
+            n_clusters = min(max(2, len(valid_articles) // 3), len(valid_articles))
+            clustering = AgglomerativeClustering(
+                n_clusters=n_clusters,
+                metric='precomputed',
+                linkage='average'
+            )
+            
+            cluster_labels = clustering.fit_predict(distance_matrix)
+            
+            # 组织聚类结果
+            clusters = {}
+            for i, label in enumerate(cluster_labels):
+                cluster_key = f"cluster_{label}"
+                if cluster_key not in clusters:
+                    clusters[cluster_key] = []
+                clusters[cluster_key].append(valid_articles[i])
+            
+            # 添加无效标题的文章到最大的聚类中
+            if len(valid_indices) < len(articles):
+                largest_cluster = max(clusters.keys(), key=lambda k: len(clusters[k]))
+                for i, article in enumerate(articles):
+                    if i not in valid_indices:
+                        clusters[largest_cluster].append(article)
+            
+            logger.info(f"Created {len(clusters)} event clusters from {len(articles)} articles")
+            return clusters
+            
+        except Exception as e:
+            logger.warning(f"Clustering failed: {e}, returning single cluster")
+            return {"cluster_0": articles}
+    
     def detect_omissions(self, article: Dict, cluster: List[Dict]) -> OmissionResult:
         """检测文章中的省略模式"""
         
@@ -104,15 +177,19 @@ class OmissionDetector:
             # 计算每个主题在簇中的重要性
             topic_scores = np.mean(tfidf_matrix.toarray(), axis=0)
             
-            # 选择top主题
+            # 选择top主题，保持稳定排序
             top_indices = np.argsort(topic_scores)[-20:]  # 取前20个主题
-            key_topics = [feature_names[i] for i in top_indices if topic_scores[i] > 0.1]
+            key_topics_with_scores = [(feature_names[i], topic_scores[i]) for i in top_indices if topic_scores[i] > 0.1]
+            
+            # 按分数降序排序，分数相同时按字母序排序（保证稳定性）
+            key_topics_with_scores.sort(key=lambda x: (-x[1], x[0]))
+            key_topics = [topic for topic, score in key_topics_with_scores]
             
             # 补充实体提取
             entity_topics = self._extract_cluster_entities(cluster)
             
-            # 合并并去重
-            all_topics = list(set(key_topics + entity_topics))
+            # 合并，保持TF-IDF主题的优先级
+            all_topics = key_topics + [entity for entity in entity_topics if entity not in key_topics]
             
             logger.debug(f"Identified {len(all_topics)} key topics for cluster")
             return all_topics[:15]  # 限制主题数量
@@ -131,9 +208,14 @@ class OmissionDetector:
             title = article.get('title', '').lower()
             content = article.get('content', '').lower()
             
-            # 估算lede（前4句或前300字符）
-            sentences = content.split('.')[:4]
-            lede = ' '.join(sentences).lower()
+            # 使用TextProcessor进行句子切分
+            from .text_processor import TextProcessor
+            text_processor = TextProcessor(self.config)
+            sentences = text_processor.split_sentences(content)
+            
+            # 估算lede（前4句）
+            lede_sentences = sentences[:4] if sentences else []
+            lede = ' '.join(lede_sentences).lower()
             
             # 计算各区域的主题覆盖率
             headline_coverage = self._compute_topic_coverage(title, key_topics)
@@ -226,10 +308,14 @@ class OmissionDetector:
         
         try:
             title = article.get('title', '').lower()
-            content = article.get('content', '').lower()
+            content = article.get('content', '')
+            
+            # 使用TextProcessor进行句子切分
+            from .text_processor import TextProcessor
+            text_processor = TextProcessor(self.config)
+            sentences = text_processor.split_sentences(content)
             
             # 估算不同区域
-            sentences = content.split('.')
             lede = ' '.join(sentences[:4]).lower() if sentences else ''
             narration = ' '.join(sentences[4:]).lower() if len(sentences) > 4 else ''
             
@@ -257,10 +343,23 @@ class OmissionDetector:
         if not topics or not text:
             return 0.0
         
+        import re
         covered_count = 0
+        text_lower = text.lower()
+        
         for topic in topics:
-            if topic.lower() in text:
-                covered_count += 1
+            topic_lower = topic.lower()
+            
+            # 使用词边界匹配，避免子字符串误匹配
+            if ' ' in topic_lower:
+                # 多词主题，直接搜索
+                if topic_lower in text_lower:
+                    covered_count += 1
+            else:
+                # 单词主题，使用词边界
+                pattern = r'\b' + re.escape(topic_lower) + r'\b'
+                if re.search(pattern, text_lower):
+                    covered_count += 1
         
         return covered_count / len(topics)
     
@@ -309,7 +408,11 @@ class OmissionDetector:
             # 检查内容前部分
             content = article.get('content', '')
             if content:
-                sentences = content.split('.')[:6]  # 前6句
+                # 使用TextProcessor进行句子切分
+                from .text_processor import TextProcessor
+                text_processor = TextProcessor(self.config)
+                sentences = text_processor.split_sentences(content)[:6]  # 前6句
+                
                 for i, sentence in enumerate(sentences):
                     if topic.lower() in sentence.lower():
                         supporting_fragments.append({
