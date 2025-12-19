@@ -9,7 +9,7 @@ from collections import Counter
 import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from .omission_graph import OmissionGraph, OmissionResult, GraphNode, OmissionAwareGraphBuilder, EntityExtractor
+from .omission_graph import OmissionResult, OmissionAwareGraphBuilder, EntityExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -250,12 +250,13 @@ class OmissionDetector:
         
         try:
             # 提取文章的不同区域文本
-            title = processed_article.title.lower() if processed_article.title else ""
+            title = processed_article.title if processed_article.title else ""
             content = processed_article.content if processed_article.content else ""
             
             # 使用已经切分好的句子来估算lede（原文分句，覆盖率计算时再lower）
-            lede_sentences = processed_article.sentences[:4] if processed_article.sentences else []
-            lede = ' '.join(lede_sentences).lower()
+            sentences = processed_article.sentences or []
+            lede_sentences = sentences[:4]
+            lede = ' '.join(lede_sentences)
             
             # 计算各区域的主题覆盖率（_compute_topic_coverage内部会处理大小写）
             headline_coverage = self._compute_topic_coverage(title, key_topics)
@@ -288,7 +289,7 @@ class OmissionDetector:
         
         try:
             # 提取文章的不同区域文本
-            title = article.get('title', '').lower()
+            title = article.get('title', '')
             content = article.get('content', '')
             
             # 使用TextProcessor进行句子切分（用原文，避免大小写影响分句）
@@ -296,7 +297,7 @@ class OmissionDetector:
             
             # 估算lede（前4句）
             lede_sentences = sentences[:4] if sentences else []
-            lede = ' '.join(lede_sentences).lower()
+            lede = ' '.join(lede_sentences)
             
             # 计算各区域的主题覆盖率
             headline_coverage = self._compute_topic_coverage(title, key_topics)
@@ -432,7 +433,7 @@ class OmissionDetector:
             title = processed_article.title if processed_article.title else ""
             
             # 使用已经切分好的句子
-            sentences = processed_article.sentences
+            sentences = processed_article.sentences or []
             lede = ' '.join(sentences[:4]) if sentences else ''
             narration = ' '.join(sentences[4:]) if len(sentences) > 4 else ''
             
