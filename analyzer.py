@@ -49,6 +49,7 @@ class FramingAnalyzer:
         logger.info("FramingAnalyzer initialized successfully")
     
     def analyze_article(self, content: str, title: str = "", 
+                       article_id: Optional[str] = None,
                        event_cluster: Optional[List[Dict]] = None) -> FramingResult:
         """分析单篇文章
         
@@ -72,7 +73,9 @@ class FramingAnalyzer:
         omission_result = None
         if self.omission_detector and event_cluster:
             omission_result = self.omission_detector.detect_omissions(
-                processed_article, event_cluster
+                article_id=article_id or "unknown",
+                processed_article=processed_article,
+                cluster=event_cluster
             )
         
         # Step 5-8: 框架分析（包含省略结果）
@@ -124,6 +127,7 @@ class FramingAnalyzer:
                 result = self.analyze_article(
                     article['content'], 
                     article.get('title', ''),
+                    article.get('id'),
                     event_cluster
                 )
                 

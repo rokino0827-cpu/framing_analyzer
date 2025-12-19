@@ -62,6 +62,16 @@ def test_analyzer_creation():
         omission_analyzer = create_analyzer(enable_omission=True)
         print(f"✓ Omission-enabled analyzer created, has omission detector: {omission_analyzer.omission_detector is not None}")
         
+        # 测试analyze_article方法签名
+        import inspect
+        sig = inspect.signature(analyzer.analyze_article)
+        params = list(sig.parameters.keys())
+        if 'article_id' in params and 'event_cluster' in params:
+            print("✓ analyze_article method has correct signature with article_id and event_cluster parameters")
+        else:
+            print(f"✗ analyze_article method signature incorrect: {params}")
+            return False
+        
         return True
     except Exception as e:
         print(f"✗ Analyzer creation error: {e}")
