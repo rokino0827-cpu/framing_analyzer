@@ -9,3 +9,5 @@ bias_detector_data/
 
 # Tooling/temp
 .spec-workflow/
+all-MiniLM-L6-v2/
+bias_detector_data/

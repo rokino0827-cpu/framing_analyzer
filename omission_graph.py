@@ -5,13 +5,12 @@
 
 import numpy as np
 import networkx as nx
-from typing import List, Dict, Tuple, Optional, Set
+from typing import List, Dict, Tuple, Optional, Set, Any
 from dataclasses import dataclass
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import logging
-import spacy
 from collections import Counter, defaultdict
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -152,22 +151,48 @@ class OmissionAwareGraphBuilder:
     
     def __init__(self, config):
         self.config = config
-        
-        # 初始化嵌入模型
-        try:
-            self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-            logger.info("Loaded sentence transformer model: all-MiniLM-L6-v2")
-        except Exception as e:
-            logger.warning(f"Failed to load sentence transformer: {e}")
-            self.embedding_model = None
+        self.embedding_model = self._load_embedding_model()
         
         # 初始化NLP模型用于实体识别
         try:
+            import spacy  # 延迟导入以避免未安装时报错
             self.nlp = spacy.load("en_core_web_sm")
             logger.info("Loaded spaCy model: en_core_web_sm")
         except Exception as e:
             logger.warning(f"Failed to load spaCy model: {e}")
             self.nlp = None
+
+    def _load_embedding_model(self) -> Optional[Any]:
+        """初始化句向量模型，优先使用仓库内的本地副本"""
+        omission_cfg = getattr(self.config, "omission", None)
+        configured_name = getattr(
+            omission_cfg, "embedding_model_name_or_path", "all-MiniLM-L6-v2"
+        )
+
+        local_repo_path = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
+
+        candidates: List[Path] = []
+        if configured_name:
+            configured_path = Path(configured_name)
+            if configured_path.exists():
+                candidates.append(configured_path)
+        if local_repo_path.exists() and local_repo_path not in candidates:
+            candidates.append(local_repo_path)
+        if configured_name:
+            candidates.append(Path(configured_name))
+
+        for candidate in candidates:
+            target = str(candidate)
+            try:
+                from sentence_transformers import SentenceTransformer  # 延迟导入
+                model = SentenceTransformer(target)
+                logger.info(f"Loaded sentence transformer model from {target}")
+                return model
+            except Exception as exc:
+                logger.warning(f"Failed to load sentence transformer from {target}: {exc}")
+
+        logger.warning("No sentence transformer model available, omission embeddings disabled")
+        return None
     
     def build_graph(self, cluster_fragments: List[Dict]) -> OmissionGraph:
         """构建省略感知图"""

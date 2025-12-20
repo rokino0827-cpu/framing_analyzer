@@ -49,9 +49,10 @@ class ProcessingConfig:
 class TeacherConfig:
     """Teacher模型配置"""
     model_name: str = "himel7/bias-detector"
+    model_local_path: Optional[str] = "bias_detector_data"  # 优先使用本地模型以避免联网
     max_length: int = 512
     batch_size: int = 16
-    device: str = "auto"
+    device: str = "cuda"  # auto: 优先CUDA，失败自动降级CPU
     
     # 片段处理模式
     fragment_mode: str = "sentence"  # "sentence" 或 "chunk"
@@ -128,6 +129,8 @@ class RelativeFramingConfig:
 class OmissionConfig:
     """省略感知配置（新增OmiGraph功能）"""
     enabled: bool = False
+    # 嵌入模型路径（支持本地目录或模型名称）
+    embedding_model_name_or_path: str = "all-MiniLM-L6-v2"
     
     # 图构建配置
     similarity_threshold: float = 0.5  # 跨文边相似度阈值

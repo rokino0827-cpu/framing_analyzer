@@ -30,24 +30,38 @@ class BiasTeacher:
             device = "cuda" if torch.cuda.is_available() else "cpu"
         else:
             device = self.config.device
+            if device.startswith("cuda") and not torch.cuda.is_available():
+                logger.warning("CUDA未就绪，自动回退CPU")
+                device = "cpu"
         
         logger.info(f"Using device: {device}")
         return device
     
     def _load_model(self):
         """加载bias_detector模型"""
-        logger.info(f"Loading bias_detector model: {self.config.model_name}")
+        # 优先使用本地路径，避免离线环境拉取失败
+        model_path = self.config.model_local_path or self.config.model_name
+        logger.info(f"Loading bias_detector model from: {model_path}")
         
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.config.model_name)
-            self.model.to(self.device)
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+            self.model = AutoModelForSequenceClassification.from_pretrained(model_path, local_files_only=True)
+            try:
+                self.model.to(self.device)
+            except RuntimeError as cuda_err:
+                if self.device.startswith("cuda"):
+                    logger.warning(f"CUDA不可用，自动回退CPU: {cuda_err}")
+                    self.device = "cpu"
+                    self.model.to(self.device)
+                else:
+                    raise
             self.model.eval()
             
             logger.info("Model loaded successfully")
             
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
+            logger.error("如果需要联网下载模型，请清除local_files_only或更新config.teacher.model_local_path")
             raise
     
     def predict_fragments(self, fragments: List[Dict]) -> List[Dict]:
