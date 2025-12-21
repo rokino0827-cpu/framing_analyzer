@@ -2,6 +2,12 @@
 """
 快速测试脚本 - 用于日常开发和调试
 
+功能：
+- 验证bias_class_index配置
+- 测试基础框架分析功能
+- 测试省略检测功能（可选）
+- 快速反馈（<60秒）
+
 用法：
     PYTHONPATH="/root/autodl-tmp" python framing_analyzer/quick_test.py
 """
@@ -142,10 +148,17 @@ def quick_test():
         return False
     
     # 5. 省略检测测试（可选）
-    print("\n5️⃣  Testing omission detection (optional)...")
+    print("\n5️⃣  Testing omission detection...")
     try:
-        omission_config = config
+        omission_config = AnalyzerConfig()
+        omission_config.teacher.bias_class_index = bias_index
+        omission_config.teacher.model_local_path = "bias_detector_data"
+        omission_config.output.output_dir = "results/quick_test_omission"
+        
+        # 启用省略检测
         omission_config.omission.enabled = True
+        omission_config.omission.embedding_model_name_or_path = "all-MiniLM-L6-v2"
+        omission_config.omission.fusion_weight = 0.2
         
         omission_analyzer = create_analyzer(omission_config)
         omission_results = omission_analyzer.analyze_batch(articles[:2])  # 只测试2篇
@@ -156,9 +169,11 @@ def quick_test():
                 if isinstance(result_dict, dict):
                     if result_dict.get('omission_score') is not None:
                         omission_count += 1
+                        print(f"   📊 Article {result_dict.get('id')}: omission_score = {result_dict.get('omission_score'):.3f}")
                 else:
                     if hasattr(result_dict, 'omission_score') and result_dict.omission_score is not None:
                         omission_count += 1
+                        print(f"   📊 Article {getattr(result_dict, 'id', 'unknown')}: omission_score = {result_dict.omission_score:.3f}")
         
         total_results = len(omission_results['results']) if omission_results and 'results' in omission_results else 0
         
@@ -167,6 +182,8 @@ def quick_test():
         
     except Exception as e:
         print(f"⚠️  Omission detection test failed: {e}")
+        import traceback
+        traceback.print_exc()
     
     print("\n🎉 Quick test completed successfully!")
     print("\n💡 To run comprehensive test:")

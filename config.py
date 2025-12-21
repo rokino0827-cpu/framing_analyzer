@@ -165,6 +165,9 @@ class OmissionConfig:
     use_spacy: bool = True           # 是否使用spaCy进行实体识别
     entity_types: List[str] = None   # 关注的实体类型
     
+    # 融合配置 - 新增
+    fusion_weight: float = 0.2       # 省略分数在最终分数中的权重 (推荐0.1-0.3)
+    
     def __post_init__(self):
         if self.entity_types is None:
             self.entity_types = ['PERSON', 'ORG', 'GPE', 'EVENT']

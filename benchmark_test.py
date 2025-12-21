@@ -1,7 +1,13 @@
 #!/usr/bin/env python3
 """
 性能基准测试脚本
-测试不同配置下的性能表现
+测试不同配置下的性能表现，包括省略检测功能
+
+功能：
+- 多种配置性能对比（fast, standard, precision, omission）
+- 不同数据量测试（1-50篇文章）
+- 吞吐量统计和优化建议
+- 省略检测性能评估
 
 用法：
     PYTHONPATH="/root/autodl-tmp" python framing_analyzer/benchmark_test.py
@@ -106,6 +112,8 @@ class BenchmarkTest:
         # 4. 省略检测配置
         omission_config = base_config
         omission_config.omission.enabled = True
+        omission_config.omission.embedding_model_name_or_path = "all-MiniLM-L6-v2"
+        omission_config.omission.fusion_weight = 0.2
         omission_config.teacher.batch_size = 16
         configs["omission"] = omission_config
         
@@ -120,6 +128,7 @@ class BenchmarkTest:
             'config_name': config_name,
             'batch_size': config.teacher.batch_size,
             'omission_enabled': config.omission.enabled,
+            'omission_fusion_weight': getattr(config.omission, 'fusion_weight', None) if config.omission.enabled else None,
             'results': {}
         }
         

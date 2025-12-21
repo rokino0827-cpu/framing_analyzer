@@ -27,8 +27,7 @@ import pandas as pd
 import numpy as np
 
 # 设置路径
-PROJECT_ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(PROJECT_ROOT.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from framing_analyzer import (
     AnalyzerConfig, 
@@ -50,8 +49,8 @@ class ComprehensiveTest:
     
     def __init__(self, args):
         self.args = args
-        self.data_path = PROJECT_ROOT / "data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv"
-        self.output_dir = PROJECT_ROOT / args.output_dir
+        self.data_path = Path("data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv")
+        self.output_dir = Path(args.output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 测试结果
@@ -130,7 +129,7 @@ class ComprehensiveTest:
         
         # 配置bias_class_index
         config.teacher.bias_class_index = self.args.config_bias_index
-        config.teacher.model_local_path = str(PROJECT_ROOT / "bias_detector_data")
+        config.teacher.model_local_path = "bias_detector_data"
         config.teacher.batch_size = 16
         
         # 输出配置
@@ -142,9 +141,13 @@ class ComprehensiveTest:
         # 省略检测配置
         if self.args.enable_omission:
             config.omission.enabled = True
+            config.omission.embedding_model_name_or_path = "all-MiniLM-L6-v2"  # 确保使用本地模型
             config.omission.key_topics_count = 10
             config.omission.similarity_threshold = 0.5
-            logger.info("✅ Omission detection enabled")
+            config.omission.fusion_weight = 0.2  # 设置融合权重
+            config.omission.guidance_threshold = 0.3
+            config.omission.min_topic_frequency = 2
+            logger.info("✅ Omission detection enabled with fusion_weight=0.2")
         
         # 相对框架分析配置
         if self.args.enable_relative:
@@ -156,6 +159,7 @@ class ComprehensiveTest:
         self.test_results['config'] = {
             'bias_class_index': config.teacher.bias_class_index,
             'omission_enabled': config.omission.enabled,
+            'omission_fusion_weight': config.omission.fusion_weight if config.omission.enabled else None,
             'relative_enabled': config.relative_framing.enabled,
             'batch_size': config.teacher.batch_size
         }

@@ -13,6 +13,7 @@ PYTHONPATH="/root/autodl-tmp" python framing_analyzer/quick_test.py
 - ✅ 测试少量文章（3-5篇）
 - ✅ 快速反馈（<30秒）
 - ✅ 内置测试数据
+- ✅ 省略检测功能测试
 
 ### 🧪 全面测试
 **`comprehensive_test.py`** - 完整功能测试
@@ -38,14 +39,7 @@ PYTHONPATH="/root/autodl-tmp" python framing_analyzer/comprehensive_test.py --fu
 - ✅ Ground truth对比评估
 - ✅ 详细性能统计
 - ✅ 错误处理和报告
-
-**参数说明：**
-- `--sample N`: 测试前N篇文章（默认50）
-- `--full`: 测试全部数据（可能很慢）
-- `--enable-omission`: 启用省略检测
-- `--enable-relative`: 启用相对框架分析
-- `--output-dir DIR`: 输出目录
-- `--config-bias-index N`: 设置bias_class_index
+- ✅ 省略分数融合测试
 
 ### 📊 性能基准测试
 **`benchmark_test.py`** - 性能评估和优化
@@ -56,6 +50,26 @@ PYTHONPATH="/root/autodl-tmp" python framing_analyzer/benchmark_test.py
 - ✅ 不同数据量测试（1, 5, 10, 20, 50篇）
 - ✅ 吞吐量统计（articles/second）
 - ✅ 配置优化建议
+- ✅ 省略检测性能测试
+
+### 🔍 省略检测专项测试
+**`test_omission_enabled.py`** - 验证省略检测启用
+```bash
+PYTHONPATH="/root/autodl-tmp" python framing_analyzer/test_omission_enabled.py
+```
+- ✅ 验证省略检测正确启用
+- ✅ 检查省略相关字段输出
+- ✅ 测试融合权重效果
+- ✅ 详细的调试信息
+
+**`optimize_fusion_weight.py`** - 融合权重优化
+```bash
+PYTHONPATH="/root/autodl-tmp" python framing_analyzer/optimize_fusion_weight.py
+```
+- ✅ 网格搜索最佳融合权重
+- ✅ 评估与ground truth的相关性
+- ✅ AUC和准确率评估
+- ✅ 生成优化报告
 
 ### 🔧 配置验证工具
 **`verify_bias_class.py`** - 验证bias_class_index
@@ -131,13 +145,19 @@ results/
 ```
 
 **分析结果字段说明：**
-- `framing_intensity`: 框架偏见强度 (0.0-1.0)
+- `framing_intensity`: 框架偏见强度 (0.0-1.0) - **融合了省略分数**
 - `pseudo_label`: 伪标签 ("positive", "negative", "uncertain")
 - `components`: 各组件分数 (headline, lede, narration, quotes)
 - `evidence`: 证据片段列表
 - `statistics`: 统计信息
-- `omission_score`: 省略分数（如果启用）
+- `omission_score`: 省略分数（如果启用）- **独立的省略检测分数**
 - `omission_evidence`: 省略证据（如果启用）
+
+**重要说明：**
+- `framing_intensity` 是最终融合分数，已包含省略检测的影响
+- `omission_score` 是独立的省略检测分数，用于分析和调试
+- 融合公式：`final_intensity = (1 - α) * base_intensity + α * omission_score`
+- 默认融合权重 α = 0.2，可通过 `config.omission.fusion_weight` 调整
 
 **`benchmark_results.json`** - 性能数据
 ```json
@@ -172,17 +192,21 @@ PYTHONPATH="/root/autodl-tmp" python framing_analyzer/debug_result_structure.py
 ### 开发阶段
 1. **日常开发**: 使用 `quick_test.py` 验证基本功能
 2. **功能测试**: 使用 `comprehensive_test.py --sample 20` 测试新功能
-3. **性能优化**: 使用 `benchmark_test.py` 评估性能改进
+3. **省略检测**: 使用 `test_omission_enabled.py` 验证省略检测
+4. **性能优化**: 使用 `benchmark_test.py` 评估性能改进
+5. **权重优化**: 使用 `optimize_fusion_weight.py` 优化融合参数
 
 ### 部署前验证
 1. **完整测试**: `comprehensive_test.py --sample 100 --enable-omission`
 2. **性能验证**: `benchmark_test.py` 确保性能满足要求
 3. **配置验证**: `verify_bias_class.py` 确认模型配置
+4. **融合优化**: `optimize_fusion_weight.py` 找到最佳融合权重
 
 ### 生产环境监控
 1. **定期测试**: 定期运行 `comprehensive_test.py` 监控系统健康
 2. **性能监控**: 使用 `benchmark_test.py` 监控性能退化
 3. **数据质量**: 检查ground truth相关性是否稳定
+4. **省略检测**: 监控省略检测率和融合效果
 
 ## 故障排除
 

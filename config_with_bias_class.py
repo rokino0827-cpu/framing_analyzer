@@ -25,48 +25,67 @@ def create_configured_analyzer():
     analyzer = create_analyzer(config)
     return analyzer
 
-def create_analyzer_with_bias_class_name():
-    """使用bias_class_name的方式（如果模型有明确标签名）"""
+def create_analyzer_with_omission():
+    """创建启用省略检测的分析器示例"""
     
     config = AnalyzerConfig()
-    # 如果模型的标签是有意义的名称，可以用这种方式
-    # config.teacher.bias_class_name = "BIASED"  # 示例
-    
-    # 但对于LABEL_0/LABEL_1这种通用标签，还是用index更可靠
     config.teacher.bias_class_index = 1
+    config.teacher.model_local_path = "bias_detector_data"
+    
+    # 启用省略检测
+    config.omission.enabled = True
+    config.omission.embedding_model_name_or_path = "all-MiniLM-L6-v2"
+    config.omission.fusion_weight = 0.2
     
     analyzer = create_analyzer(config)
     return analyzer
 
-def test_configured_analyzer():
-    """测试配置后的分析器"""
+def test_omission_detection():
+    """测试省略检测功能"""
     
-    print("🔧 创建已配置的分析器...")
-    analyzer = create_configured_analyzer()
+    print("🔍 测试省略检测功能...")
+    analyzer = create_analyzer_with_omission()
     
-    print("📝 测试分析...")
-    test_text = """
-    The government announced new economic policies yesterday. 
-    These measures are expected to impact various sectors of the economy.
-    Officials stated that the implementation will begin next quarter.
-    """
+    test_articles = [
+        {
+            "id": "test_omission_1",
+            "title": "Economic Policy Changes",
+            "content": "The government announced new economic policies. Tax reforms will be implemented next year."
+        },
+        {
+            "id": "test_omission_2", 
+            "title": "Economic Reforms Impact",
+            "content": "The new economic policies affect healthcare and education sectors. Budget cuts are expected in multiple areas."
+        }
+    ]
     
-    result = analyzer.analyze_article(test_text, "Economic Policy Update")
+    results = analyzer.analyze_batch(test_articles)
     
-    print("✅ 分析完成！")
-    print(f"框架偏见分数: {result.framing_score:.3f}")
-    print(f"偏见强度: {result.bias_intensity}")
+    for result in results['results']:
+        article_id = result.get('id')
+        omission_score = result.get('omission_score')
+        framing_intensity = result.get('framing_intensity')
+        
+        print(f"📄 {article_id}:")
+        print(f"   Framing Intensity: {framing_intensity:.3f}")
+        print(f"   Omission Score: {omission_score}")
     
-    return result
+    return results
 
 if __name__ == "__main__":
-    # 运行测试
-    result = test_configured_analyzer()
+    # 运行基础测试
+    print("1️⃣  测试基础配置...")
+    result = create_configured_analyzer()
+    
+    # 运行省略检测测试
+    print("\n2️⃣  测试省略检测...")
+    omission_results = test_omission_detection()
     
     print("\n💡 配置说明:")
     print("1. 首先运行 verify_bias_class.py 确定正确的索引")
     print("2. 在代码中设置 config.teacher.bias_class_index = <验证得到的索引>")
-    print("3. 重新运行，警告应该消失")
+    print("3. 可选：启用省略检测 config.omission.enabled = True")
+    print("4. 重新运行，警告应该消失")
     
     print("\n🔍 如果仍有警告，请检查:")
     print("- bias_class_index 是否设置正确")

@@ -108,7 +108,8 @@ class FramingScorer:
     
     def compute_framing_intensity(self, zone_scores: Dict[str, float], 
                                  indicators: Dict[str, float],
-                                 omission_score: Optional[float] = None) -> float:
+                                 omission_score: Optional[float] = None,
+                                 omission_config: Optional[object] = None) -> float:
         """合成文章级Framing-Intensity分数 - Step 6"""
         
         # 基础框架强度计算
@@ -124,13 +125,12 @@ class FramingScorer:
             self.config.sparse_signal_weight * indicators.get('frac_high', 0.0)
         )
         
-        # 如果启用省略感知，整合省略分数
+        # 如果启用省略感知，使用线性融合
         if omission_score is not None:
-            # 省略分数作为额外的结构指标，权重为0.1
-            omission_weight = 0.1
-            # 重新归一化其他权重
-            normalization_factor = (1.0 - omission_weight) / base_weights_sum
-            F = F * normalization_factor + omission_weight * omission_score
+            # 获取融合权重，默认0.2
+            omission_weight = getattr(omission_config, 'fusion_weight', 0.2) if omission_config else 0.2
+            # 线性融合: final_intensity = (1 - α) * framing_intensity + α * omission_intensity
+            F = (1 - omission_weight) * F + omission_weight * omission_score
         
         # 确保在[0, 1]范围内
         return max(0.0, min(1.0, F))
@@ -301,8 +301,12 @@ class FramingAnalysisEngine:
         
         # Step 6: 计算framing强度（可能包含省略分数）
         omission_score = omission_result.omission_score if omission_result else None
+        
+        # 获取省略配置用于融合权重
+        omission_config = getattr(self.config, 'omission', None)
+        
         framing_intensity = self.scorer.compute_framing_intensity(
-            zone_scores, structural_indicators, omission_score
+            zone_scores, structural_indicators, omission_score, omission_config
         )
         
         # Step 7: 生成伪标签（需要先拟合阈值）
