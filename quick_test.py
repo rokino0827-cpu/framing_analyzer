@@ -15,7 +15,8 @@ import pandas as pd
 import numpy as np
 
 # 设置路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT.parent))
 
 from framing_analyzer import (
     AnalyzerConfig, 
@@ -50,13 +51,13 @@ def quick_test():
     print("\n2️⃣  Creating configuration...")
     config = AnalyzerConfig()
     config.teacher.bias_class_index = bias_index
-    config.teacher.model_local_path = "bias_detector_data"
-    config.output.output_dir = "results/quick_test"
+    config.teacher.model_local_path = str(PROJECT_ROOT / "bias_detector_data")
+    config.output.output_dir = str(PROJECT_ROOT / "results/quick_test")
     print("✅ Configuration created")
     
     # 3. 测试数据
     print("\n3️⃣  Loading test data...")
-    data_path = Path("data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv")
+    data_path = PROJECT_ROOT / "data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv"
     
     if data_path.exists():
         df = pd.read_csv(data_path, encoding="utf-8")

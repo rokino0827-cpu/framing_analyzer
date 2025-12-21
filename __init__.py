@@ -12,6 +12,7 @@ __email__ = "research@example.com"
 
 # 类型注解导入
 from typing import List, Dict, Optional
+from pathlib import Path
 
 # 核心组件导入
 from .config import AnalyzerConfig, ProcessingConfig, TeacherConfig, ScoringConfig, OutputConfig, OmissionConfig
@@ -62,6 +63,11 @@ def verify_bias_class_index(model_name_or_path: str = "himel7/bias-detector",
     # 创建临时配置
     temp_config = AnalyzerConfig()
     temp_config.teacher.model_name = model_name_or_path
+
+    # 优先使用仓库内的本地模型目录，避免联网下载
+    local_model_dir = Path(__file__).resolve().parent / "bias_detector_data"
+    if local_model_dir.exists():
+        temp_config.teacher.model_local_path = str(local_model_dir)
     
     # 创建teacher并验证
     teacher = BiasTeacher(temp_config)

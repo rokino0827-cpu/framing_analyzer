@@ -7,11 +7,15 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import numpy as np
+from pathlib import Path
 
-def verify_bias_class_index(model_path="bias_detector_data"):
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+def verify_bias_class_index(model_path=None):
     """验证bias类别索引"""
     
     print("🔍 正在验证bias类别索引...")
+    model_path = model_path or PROJECT_ROOT / "bias_detector_data"
     print(f"📁 模型路径: {model_path}")
     
     # 设备选择

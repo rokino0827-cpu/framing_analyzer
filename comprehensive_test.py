@@ -27,7 +27,8 @@ import pandas as pd
 import numpy as np
 
 # 设置路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT.parent))
 
 from framing_analyzer import (
     AnalyzerConfig, 
@@ -49,8 +50,8 @@ class ComprehensiveTest:
     
     def __init__(self, args):
         self.args = args
-        self.data_path = Path("data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv")
-        self.output_dir = Path(args.output_dir)
+        self.data_path = PROJECT_ROOT / "data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv"
+        self.output_dir = PROJECT_ROOT / args.output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         # 测试结果
@@ -127,7 +128,7 @@ class ComprehensiveTest:
         
         # 配置bias_class_index
         config.teacher.bias_class_index = self.args.config_bias_index
-        config.teacher.model_local_path = "bias_detector_data"
+        config.teacher.model_local_path = str(PROJECT_ROOT / "bias_detector_data")
         config.teacher.batch_size = 16
         
         # 输出配置

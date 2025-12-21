@@ -17,6 +17,8 @@ import pandas as pd
 from framing_analyzer.analyzer import FramingAnalyzer
 from framing_analyzer.config import default_config
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 def load_sample_articles(path: Path, max_rows: int = 3):
     """加载小样本数据集，返回标准化的文章列表。"""
@@ -39,18 +41,20 @@ def load_sample_articles(path: Path, max_rows: int = 3):
 
 
 def main():
-    data_path = Path("data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv")
+    data_path = PROJECT_ROOT / "data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv"
     if not data_path.exists():
         raise FileNotFoundError(f"未找到数据文件: {data_path}")
 
     # 使用深拷贝避免修改全局单例
     import copy
     cfg = copy.deepcopy(default_config)
-    cfg.output.output_dir = "results/test_sample"
+    cfg.teacher.model_local_path = str(PROJECT_ROOT / "bias_detector_data")
+    cfg.output.output_dir = str(PROJECT_ROOT / "results/test_sample")
 
     articles = load_sample_articles(data_path, max_rows=3)
     analyzer = FramingAnalyzer(cfg)
-    results = analyzer.analyze_batch(articles, output_path="results/test_sample/run.json")
+    output_path = PROJECT_ROOT / "results/test_sample/run.json"
+    results = analyzer.analyze_batch(articles, output_path=str(output_path))
 
     print("分析完成，概要：")
     print(json.dumps(results["metadata"], indent=2, ensure_ascii=False))

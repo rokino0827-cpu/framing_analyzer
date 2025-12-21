@@ -5,6 +5,7 @@
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 import json
+from pathlib import Path
 
 @dataclass
 class ProcessingConfig:
@@ -67,6 +68,15 @@ class TeacherConfig:
     # Bias类别配置
     bias_class_index: Optional[int] = 1  # 直接指定0/1
     bias_class_name: Optional[str] = None   # 或指定label名称（如果模型有明确标签）
+
+    def __post_init__(self):
+        # 将相对路径解析为仓库内绝对路径，避免离线加载失败
+        if self.model_local_path:
+            path_obj = Path(self.model_local_path)
+            if not path_obj.is_absolute():
+                candidate = Path(__file__).resolve().parent / path_obj
+                if candidate.exists():
+                    self.model_local_path = str(candidate)
 
 @dataclass
 class ScoringConfig:

@@ -18,7 +18,8 @@ import pandas as pd
 import numpy as np
 
 # 设置路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+PROJECT_ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROJECT_ROOT.parent))
 
 from framing_analyzer import AnalyzerConfig, create_analyzer
 
@@ -30,7 +31,7 @@ class BenchmarkTest:
     """性能基准测试"""
     
     def __init__(self):
-        self.data_path = Path("data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv")
+        self.data_path = PROJECT_ROOT / "data/all-the-news-2-1_2025-window_bias_scored_balanced_500_clean.csv"
         self.results = {}
     
     def load_test_data(self, sample_sizes: List[int]) -> Dict[int, List[Dict]]:
@@ -81,7 +82,7 @@ class BenchmarkTest:
         # 基础配置
         base_config = AnalyzerConfig()
         base_config.teacher.bias_class_index = 1
-        base_config.teacher.model_local_path = "bias_detector_data"
+        base_config.teacher.model_local_path = str(PROJECT_ROOT / "bias_detector_data")
         base_config.output.generate_plots = False  # 关闭图表生成以提高速度
         
         # 1. 快速配置（小batch）
@@ -189,7 +190,7 @@ class BenchmarkTest:
                 benchmark_results['configs'][config_name] = {'error': str(e)}
         
         # 保存结果
-        output_dir = Path("results/benchmark")
+        output_dir = PROJECT_ROOT / "results/benchmark"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         results_file = output_dir / "benchmark_results.json"
