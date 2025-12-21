@@ -100,6 +100,8 @@ class ComprehensiveTest:
                 "content": str(row["content"]),
                 "publication": row.get("publication", "unknown"),
                 "date": row.get("date", "unknown"),
+                "author": row.get("author", "unknown"),
+                "section": row.get("section", "unknown"),
             }
             
             # 添加已有的bias标签（如果存在）
@@ -187,29 +189,42 @@ class ComprehensiveTest:
             
             analysis_time = time.time() - start_time
             
-            # 统计结果
-            framing_scores = [r.framing_score for r in results['results']]
-            bias_intensities = [r.bias_intensity for r in results['results']]
-            
-            self.test_results['basic_analysis'] = {
-                'success': True,
-                'total_articles': len(results['results']),
-                'analysis_time': analysis_time,
-                'avg_time_per_article': analysis_time / len(articles),
-                'framing_score_stats': {
-                    'mean': np.mean(framing_scores),
-                    'std': np.std(framing_scores),
-                    'min': np.min(framing_scores),
-                    'max': np.max(framing_scores)
-                },
-                'bias_intensity_distribution': {
-                    intensity: sum(1 for bi in bias_intensities if bi == intensity)
-                    for intensity in set(bias_intensities)
+            # 统计结果 - 修复字段访问
+            if 'results' in results and results['results']:
+                # 结果是字典格式，不是对象
+                framing_intensities = []
+                pseudo_labels = []
+                
+                for result_dict in results['results']:
+                    if isinstance(result_dict, dict):
+                        framing_intensities.append(result_dict.get('framing_intensity', 0.0))
+                        pseudo_labels.append(result_dict.get('pseudo_label', 'uncertain'))
+                    else:
+                        # 如果是对象格式
+                        framing_intensities.append(getattr(result_dict, 'framing_intensity', 0.0))
+                        pseudo_labels.append(getattr(result_dict, 'pseudo_label', 'uncertain'))
+                
+                self.test_results['basic_analysis'] = {
+                    'success': True,
+                    'total_articles': len(results['results']),
+                    'analysis_time': analysis_time,
+                    'avg_time_per_article': analysis_time / len(articles),
+                    'framing_intensity_stats': {
+                        'mean': np.mean(framing_intensities),
+                        'std': np.std(framing_intensities),
+                        'min': np.min(framing_intensities),
+                        'max': np.max(framing_intensities)
+                    },
+                    'pseudo_label_distribution': {
+                        label: sum(1 for pl in pseudo_labels if pl == label)
+                        for label in set(pseudo_labels)
+                    }
                 }
-            }
-            
-            logger.info(f"✅ Basic analysis completed in {analysis_time:.2f}s")
-            logger.info(f"📊 Average framing score: {np.mean(framing_scores):.3f}")
+                
+                logger.info(f"✅ Basic analysis completed in {analysis_time:.2f}s")
+                logger.info(f"📊 Average framing intensity: {np.mean(framing_intensities):.3f}")
+            else:
+                raise ValueError("No results returned from analyzer")
             
             return results
             
@@ -242,22 +257,28 @@ class ComprehensiveTest:
             
             analysis_time = time.time() - start_time
             
-            # 统计省略检测结果
-            omission_results = []
-            for result in results['results']:
-                if hasattr(result, 'omission_result') and result.omission_result:
-                    omission_results.append(result.omission_result)
+            # 统计省略检测结果 - 修复字段访问
+            omission_count = 0
+            if 'results' in results and results['results']:
+                for result_dict in results['results']:
+                    if isinstance(result_dict, dict):
+                        if result_dict.get('omission_score') is not None:
+                            omission_count += 1
+                    else:
+                        # 如果是对象格式
+                        if hasattr(result_dict, 'omission_score') and result_dict.omission_score is not None:
+                            omission_count += 1
             
             self.test_results['omission_analysis'] = {
                 'success': True,
-                'total_articles': len(results['results']),
-                'articles_with_omissions': len(omission_results),
+                'total_articles': len(results['results']) if results and 'results' in results else 0,
+                'articles_with_omissions': omission_count,
                 'analysis_time': analysis_time,
-                'omission_rate': len(omission_results) / len(articles) if articles else 0
+                'omission_rate': omission_count / len(articles) if articles else 0
             }
             
             logger.info(f"✅ Omission analysis completed in {analysis_time:.2f}s")
-            logger.info(f"📊 Omission detection rate: {len(omission_results)}/{len(articles)}")
+            logger.info(f"📊 Omission detection rate: {omission_count}/{len(articles)}")
             
             return results
             
@@ -324,30 +345,49 @@ class ComprehensiveTest:
             logger.info("⏭️  No ground truth labels available")
             return
         
-        # 创建ID到结果的映射
-        results_by_id = {r.article_id: r for r in results['results']}
+        # 创建ID到结果的映射 - 修复字段访问
+        results_by_id = {}
+        for result_dict in results['results']:
+            if isinstance(result_dict, dict):
+                article_id = result_dict.get('id')
+                if article_id:
+                    results_by_id[article_id] = result_dict
+            else:
+                # 如果是对象格式
+                article_id = getattr(result_dict, 'id', None) or getattr(result_dict, 'article_id', None)
+                if article_id:
+                    results_by_id[article_id] = result_dict
         
         comparisons = []
         for article in ground_truth_articles:
             if article['id'] in results_by_id:
                 result = results_by_id[article['id']]
+                
+                # 获取预测值 - 修复字段访问
+                if isinstance(result, dict):
+                    predicted_intensity = result.get('framing_intensity', 0.0)
+                    predicted_label = result.get('pseudo_label', 'uncertain')
+                else:
+                    predicted_intensity = getattr(result, 'framing_intensity', 0.0)
+                    predicted_label = getattr(result, 'pseudo_label', 'uncertain')
+                
                 comparisons.append({
                     'ground_truth': article['ground_truth_bias'],
-                    'predicted_score': result.framing_score,
-                    'predicted_intensity': result.bias_intensity
+                    'predicted_intensity': predicted_intensity,
+                    'predicted_label': predicted_label
                 })
         
         if comparisons:
             # 简单的相关性分析
             gt_scores = [c['ground_truth'] for c in comparisons]
-            pred_scores = [c['predicted_score'] for c in comparisons]
+            pred_scores = [c['predicted_intensity'] for c in comparisons]
             
             correlation = np.corrcoef(gt_scores, pred_scores)[0, 1] if len(gt_scores) > 1 else 0
             
             self.test_results['evaluation'] = {
                 'total_comparisons': len(comparisons),
                 'correlation': correlation,
-                'avg_predicted_score': np.mean(pred_scores),
+                'avg_predicted_intensity': np.mean(pred_scores),
                 'avg_ground_truth': np.mean(gt_scores)
             }
             
@@ -380,7 +420,7 @@ class ComprehensiveTest:
         if self.test_results['basic_analysis'].get('success'):
             ba = self.test_results['basic_analysis']
             print(f"✅ Basic Analysis: {ba['total_articles']} articles in {ba['analysis_time']:.2f}s")
-            print(f"   Average framing score: {ba['framing_score_stats']['mean']:.3f}")
+            print(f"   Average framing intensity: {ba['framing_intensity_stats']['mean']:.3f}")
         
         if self.test_results['omission_analysis'].get('success'):
             oa = self.test_results['omission_analysis']

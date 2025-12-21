@@ -105,19 +105,37 @@ def quick_test():
         print(f"✅ Analysis completed in {analysis_time:.2f}s")
         print(f"📊 Processed {len(results['results'])} articles")
         
-        # 显示结果摘要
-        framing_scores = [r.framing_score for r in results['results']]
-        print(f"📈 Framing scores: {[f'{s:.3f}' for s in framing_scores]}")
-        print(f"📊 Average score: {np.mean(framing_scores):.3f}")
-        
-        # 显示第一篇文章的详细结果
-        if results['results']:
+        # 显示结果摘要 - 修复字段访问
+        if 'results' in results and results['results']:
+            framing_intensities = []
+            for result_dict in results['results']:
+                if isinstance(result_dict, dict):
+                    framing_intensities.append(result_dict.get('framing_intensity', 0.0))
+                else:
+                    framing_intensities.append(getattr(result_dict, 'framing_intensity', 0.0))
+            
+            print(f"📈 Framing intensities: {[f'{s:.3f}' for s in framing_intensities]}")
+            print(f"📊 Average intensity: {np.mean(framing_intensities):.3f}")
+            
+            # 显示第一篇文章的详细结果
             first_result = results['results'][0]
-            print(f"\n📄 Sample result (Article: {first_result.article_id}):")
-            print(f"   Framing Score: {first_result.framing_score:.3f}")
-            print(f"   Bias Intensity: {first_result.bias_intensity}")
-            if hasattr(first_result, 'evidence') and first_result.evidence:
-                print(f"   Evidence Count: {len(first_result.evidence)}")
+            if isinstance(first_result, dict):
+                article_id = first_result.get('id', 'unknown')
+                framing_intensity = first_result.get('framing_intensity', 0.0)
+                pseudo_label = first_result.get('pseudo_label', 'uncertain')
+                evidence_count = len(first_result.get('evidence', []))
+            else:
+                article_id = getattr(first_result, 'id', 'unknown')
+                framing_intensity = getattr(first_result, 'framing_intensity', 0.0)
+                pseudo_label = getattr(first_result, 'pseudo_label', 'uncertain')
+                evidence_count = len(getattr(first_result, 'evidence', []))
+            
+            print(f"\n📄 Sample result (Article: {article_id}):")
+            print(f"   Framing Intensity: {framing_intensity:.3f}")
+            print(f"   Pseudo Label: {pseudo_label}")
+            print(f"   Evidence Count: {evidence_count}")
+        else:
+            raise ValueError("No results returned from analyzer")
         
     except Exception as e:
         print(f"❌ Analysis failed: {e}")
@@ -132,11 +150,20 @@ def quick_test():
         omission_analyzer = create_analyzer(omission_config)
         omission_results = omission_analyzer.analyze_batch(articles[:2])  # 只测试2篇
         
-        omission_count = sum(1 for r in omission_results['results'] 
-                           if hasattr(r, 'omission_result') and r.omission_result)
+        omission_count = 0
+        if 'results' in omission_results and omission_results['results']:
+            for result_dict in omission_results['results']:
+                if isinstance(result_dict, dict):
+                    if result_dict.get('omission_score') is not None:
+                        omission_count += 1
+                else:
+                    if hasattr(result_dict, 'omission_score') and result_dict.omission_score is not None:
+                        omission_count += 1
+        
+        total_results = len(omission_results['results']) if omission_results and 'results' in omission_results else 0
         
         print(f"✅ Omission detection test completed")
-        print(f"📊 Articles with omissions: {omission_count}/{len(omission_results['results'])}")
+        print(f"📊 Articles with omissions: {omission_count}/{total_results}")
         
     except Exception as e:
         print(f"⚠️  Omission detection test failed: {e}")

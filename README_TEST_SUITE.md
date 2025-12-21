@@ -119,7 +119,7 @@ results/
   "basic_analysis": {
     "success": true,
     "analysis_time": 12.34,
-    "framing_score_stats": {
+    "framing_intensity_stats": {
       "mean": 0.456,
       "std": 0.123
     }
@@ -130,6 +130,15 @@ results/
 }
 ```
 
+**分析结果字段说明：**
+- `framing_intensity`: 框架偏见强度 (0.0-1.0)
+- `pseudo_label`: 伪标签 ("positive", "negative", "uncertain")
+- `components`: 各组件分数 (headline, lede, narration, quotes)
+- `evidence`: 证据片段列表
+- `statistics`: 统计信息
+- `omission_score`: 省略分数（如果启用）
+- `omission_evidence`: 省略证据（如果启用）
+
 **`benchmark_results.json`** - 性能数据
 ```json
 {
@@ -138,13 +147,25 @@ results/
       "results": {
         "50": {
           "total_time": 8.5,
-          "articles_per_second": 5.9
+          "articles_per_second": 5.9,
+          "avg_framing_intensity": 0.456
         }
       }
     }
   }
 }
 ```
+
+## 调试工具
+
+### 🔍 结果结构调试
+**`debug_result_structure.py`** - 检查返回值结构
+```bash
+PYTHONPATH="/root/autodl-tmp" python framing_analyzer/debug_result_structure.py
+```
+- ✅ 显示返回值的完整结构
+- ✅ 保存结果到JSON文件
+- ✅ 帮助理解字段名和数据类型
 
 ## 使用建议
 

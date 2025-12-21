@@ -137,17 +137,25 @@ class BenchmarkTest:
                 
                 analysis_time = end_time - start_time
                 
-                # 统计结果
-                framing_scores = [r.framing_score for r in results['results']]
-                
-                config_results['results'][size] = {
-                    'total_time': analysis_time,
-                    'time_per_article': analysis_time / size,
-                    'articles_per_second': size / analysis_time,
-                    'success_count': len(results['results']),
-                    'avg_framing_score': np.mean(framing_scores),
-                    'score_std': np.std(framing_scores)
-                }
+                # 统计结果 - 修复字段访问
+                if 'results' in results and results['results']:
+                    framing_intensities = []
+                    for result_dict in results['results']:
+                        if isinstance(result_dict, dict):
+                            framing_intensities.append(result_dict.get('framing_intensity', 0.0))
+                        else:
+                            framing_intensities.append(getattr(result_dict, 'framing_intensity', 0.0))
+                    
+                    config_results['results'][size] = {
+                        'total_time': analysis_time,
+                        'time_per_article': analysis_time / size,
+                        'articles_per_second': size / analysis_time,
+                        'success_count': len(results['results']),
+                        'avg_framing_intensity': np.mean(framing_intensities),
+                        'intensity_std': np.std(framing_intensities)
+                    }
+                else:
+                    raise ValueError("No results returned from analyzer")
                 
                 print(f"    ✅ {size} articles in {analysis_time:.2f}s ({size/analysis_time:.1f} articles/s)")
                 
