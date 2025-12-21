@@ -10,6 +10,9 @@ __version__ = "1.0.0"
 __author__ = "Research Team"
 __email__ = "research@example.com"
 
+# 类型注解导入
+from typing import List, Dict, Optional
+
 # 核心组件导入
 from .config import AnalyzerConfig, ProcessingConfig, TeacherConfig, ScoringConfig, OutputConfig, OmissionConfig
 from .text_processor import TextProcessor, StructureZoneExtractor, FragmentGenerator
@@ -114,13 +117,6 @@ def create_fast_config():
     from .config import create_fast_config
     return create_fast_config()
 
-def create_omission_enabled_config():
-    """创建启用省略检测的配置"""
-    config = AnalyzerConfig()
-    if hasattr(config, 'omission'):
-        config.omission.enabled = True
-    return config
-
 # 导出的公共API
 __all__ = [
     # 配置
@@ -140,5 +136,6 @@ __all__ = [
     
     # 便捷函数
     'create_analyzer', 'quick_analyze', 'batch_analyze', 'analyze_csv',
-    'create_quick_config', 'create_high_precision_config', 'create_fast_config', 'create_omission_enabled_config'
+    'create_quick_config', 'create_high_precision_config', 'create_fast_config', 'create_omission_enabled_config',
+    'verify_bias_class_index'
 ]
