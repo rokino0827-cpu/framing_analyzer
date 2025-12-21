@@ -65,7 +65,7 @@ class TeacherConfig:
     long_sentence_aggregation: str = "max"  # "max", "mean", "top2_mean"
     
     # Bias类别配置
-    bias_class_index: Optional[int] = None  # 直接指定0/1
+    bias_class_index: Optional[int] = 1  # 直接指定0/1
     bias_class_name: Optional[str] = None   # 或指定label名称（如果模型有明确标签）
 
 @dataclass
