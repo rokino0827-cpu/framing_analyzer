@@ -70,8 +70,10 @@ class OmissionFusionTest:
             }
             
             # 添加ground truth（如果存在）
-            if "bias_label" in row and pd.notna(row["bias_label"]):
-                article["ground_truth_bias"] = row["bias_label"]
+            if "bias_label" in df.columns and pd.notna(row["bias_label"]):
+                article["bias_label"] = row["bias_label"]
+            if "bias_probability" in df.columns and pd.notna(row["bias_probability"]):
+                article["bias_probability"] = float(row["bias_probability"])
             
             articles.append(article)
         

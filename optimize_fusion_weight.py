@@ -33,7 +33,7 @@ class FusionWeightOptimizer:
         self.results = {}
     
     def load_evaluation_data(self, max_articles: int = 100) -> Tuple[List[Dict], List[float]]:
-        """加载带有ground truth的评估数据"""
+        """加载带有bias标签的评估数据"""
         
         print(f"📁 Loading evaluation data from: {self.data_path}")
         
@@ -43,12 +43,12 @@ class FusionWeightOptimizer:
         # 读取数据
         df = pd.read_csv(self.data_path, encoding="utf-8")
         
-        # 过滤有ground truth的数据
+        # 过滤有bias标签的数据
         df = df[df["bias_label"].notna() & df["bias_probability"].notna()]
         df = df[df["content"].notna() & df["title"].notna()]
         df = df[df["content"].str.len() > 100]
         
-        print(f"📊 Found {len(df)} articles with ground truth")
+        print(f"📊 Found {len(df)} articles with bias labels")
         
         # 采样
         if len(df) > max_articles:
@@ -57,7 +57,7 @@ class FusionWeightOptimizer:
         
         # 转换为标准格式
         articles = []
-        ground_truth = []
+        bias_scores = []
         
         for idx, row in df.iterrows():
             articles.append({
@@ -65,11 +65,11 @@ class FusionWeightOptimizer:
                 "title": str(row["title"]),
                 "content": str(row["content"])
             })
-            ground_truth.append(float(row["bias_probability"]))
+            bias_scores.append(float(row["bias_probability"]))
         
-        return articles, ground_truth
+        return articles, bias_scores
     
-    def evaluate_fusion_weight(self, articles: List[Dict], ground_truth: List[float], 
+    def evaluate_fusion_weight(self, articles: List[Dict], bias_scores: List[float], 
                               fusion_weight: float) -> Dict:
         """评估特定融合权重的性能"""
         
@@ -107,10 +107,10 @@ class FusionWeightOptimizer:
                 omission_scores.append(omission_score if omission_score is not None else 0.0)
             
             # 计算评估指标
-            correlation, p_value = pearsonr(ground_truth, predicted_scores)
+            correlation, p_value = pearsonr(bias_scores, predicted_scores)
             
             # 转换为二分类进行AUC计算
-            binary_gt = [1 if gt > 0.5 else 0 for gt in ground_truth]
+            binary_gt = [1 if gt > 0.5 else 0 for gt in bias_scores]
             binary_pred = [1 if pred > 0.5 else 0 for pred in predicted_scores]
             
             try:
@@ -151,7 +151,7 @@ class FusionWeightOptimizer:
                 'error': str(e)
             }
     
-    def grid_search(self, articles: List[Dict], ground_truth: List[float], 
+    def grid_search(self, articles: List[Dict], bias_scores: List[float], 
                    weight_range: Tuple[float, float] = (0.0, 0.5),
                    num_points: int = 11) -> Dict:
         """网格搜索最佳融合权重"""
@@ -168,7 +168,7 @@ class FusionWeightOptimizer:
         best_correlation = -1
         
         for weight in weights:
-            result = self.evaluate_fusion_weight(articles, ground_truth, weight)
+            result = self.evaluate_fusion_weight(articles, bias_scores, weight)
             results.append(result)
             
             # 跟踪最佳结果
@@ -264,10 +264,10 @@ def main():
     
     try:
         # 加载评估数据
-        articles, ground_truth = optimizer.load_evaluation_data(max_articles=50)  # 限制数量以加快测试
+        articles, bias_scores = optimizer.load_evaluation_data(max_articles=50)  # 限制数量以加快测试
         
         # 网格搜索
-        results = optimizer.grid_search(articles, ground_truth, 
+        results = optimizer.grid_search(articles, bias_scores, 
                                       weight_range=(0.0, 0.4), 
                                       num_points=9)
         

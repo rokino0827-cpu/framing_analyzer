@@ -104,10 +104,10 @@ class ComprehensiveTest:
             }
             
             # 添加已有的bias标签（如果存在）
-            if "bias_label" in row and pd.notna(row["bias_label"]):
-                article["ground_truth_bias"] = row["bias_label"]
-            if "bias_probability" in row and pd.notna(row["bias_probability"]):
-                article["ground_truth_prob"] = float(row["bias_probability"])
+            if "bias_label" in df.columns and pd.notna(row["bias_label"]):
+                article["bias_label"] = row["bias_label"]
+            if "bias_probability" in df.columns and pd.notna(row["bias_probability"]):
+                article["bias_probability"] = float(row["bias_probability"])
             
             articles.append(article)
         
@@ -116,7 +116,7 @@ class ComprehensiveTest:
             'total_articles': len(articles),
             'avg_content_length': np.mean([len(a['content']) for a in articles]),
             'publications': list(set(a['publication'] for a in articles)),
-            'has_ground_truth': sum(1 for a in articles if 'ground_truth_bias' in a)
+            'has_bias_labels': sum(1 for a in articles if 'bias_label' in a)
         }
         
         return articles
@@ -336,17 +336,17 @@ class ComprehensiveTest:
             self.test_results['errors'].append(f"Relative analysis: {str(e)}")
             return None
     
-    def evaluate_against_ground_truth(self, results, articles: List[Dict]):
-        """与ground truth对比评估"""
+    def evaluate_against_bias_labels(self, results, articles: List[Dict]):
+        """与bias标签对比评估"""
         if not results or 'results' not in results:
             return
         
-        logger.info("📊 Evaluating against ground truth...")
+        logger.info("📊 Evaluating against bias labels...")
         
-        ground_truth_articles = [a for a in articles if 'ground_truth_bias' in a]
+        labeled_articles = [a for a in articles if 'bias_label' in a or 'bias_probability' in a]
         
-        if not ground_truth_articles:
-            logger.info("⏭️  No ground truth labels available")
+        if not labeled_articles:
+            logger.info("⏭️  No bias labels available")
             return
         
         # 创建ID到结果的映射 - 修复字段访问
@@ -363,7 +363,7 @@ class ComprehensiveTest:
                     results_by_id[article_id] = result_dict
         
         comparisons = []
-        for article in ground_truth_articles:
+        for article in labeled_articles:
             if article['id'] in results_by_id:
                 result = results_by_id[article['id']]
                 
@@ -375,11 +375,19 @@ class ComprehensiveTest:
                     predicted_intensity = getattr(result, 'framing_intensity', 0.0)
                     predicted_label = getattr(result, 'pseudo_label', 'uncertain')
                 
-                comparisons.append({
-                    'ground_truth': article['ground_truth_bias'],
-                    'predicted_intensity': predicted_intensity,
-                    'predicted_label': predicted_label
-                })
+                # 使用bias_probability作为ground truth，如果没有则使用bias_label
+                ground_truth_value = None
+                if 'bias_probability' in article:
+                    ground_truth_value = article['bias_probability']
+                elif 'bias_label' in article:
+                    ground_truth_value = article['bias_label']
+                
+                if ground_truth_value is not None:
+                    comparisons.append({
+                        'ground_truth': ground_truth_value,
+                        'predicted_intensity': predicted_intensity,
+                        'predicted_label': predicted_label
+                    })
         
         if comparisons:
             # 简单的相关性分析
@@ -395,7 +403,7 @@ class ComprehensiveTest:
                 'avg_ground_truth': np.mean(gt_scores)
             }
             
-            logger.info(f"📊 Correlation with ground truth: {correlation:.3f}")
+            logger.info(f"📊 Correlation with bias labels: {correlation:.3f}")
     
     def save_results(self):
         """保存测试结果"""
@@ -436,7 +444,7 @@ class ComprehensiveTest:
         
         if 'evaluation' in self.test_results:
             ev = self.test_results['evaluation']
-            print(f"📊 Ground Truth Correlation: {ev['correlation']:.3f}")
+            print(f"📊 Bias Label Correlation: {ev['correlation']:.3f}")
         
         if self.test_results['errors']:
             print(f"❌ Errors: {len(self.test_results['errors'])}")
@@ -470,7 +478,7 @@ class ComprehensiveTest:
             
             # 7. 评估
             if basic_results:
-                self.evaluate_against_ground_truth(basic_results, articles)
+                self.evaluate_against_bias_labels(basic_results, articles)
             
             # 8. 保存结果
             self.save_results()
