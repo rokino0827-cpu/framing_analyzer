@@ -24,6 +24,115 @@ class BiasTeacher:
         self.model = None
         self._load_model()
     
+    def verify_bias_class_with_examples(self, test_texts: Optional[List[str]] = None) -> Dict:
+        """
+        使用对照句验证bias类别索引
+        
+        Args:
+            test_texts: 测试文本列表，如果为None则使用默认测试句
+            
+        Returns:
+            包含验证结果的字典
+        """
+        if test_texts is None:
+            test_texts = [
+                "This is a factual report about the event.",  # 更中性
+                "Those people are disgusting and should be punished.",  # 更带偏见
+            ]
+        
+        logger.info("Verifying bias class index with test examples...")
+        
+        # Tokenization
+        inputs = self.tokenizer(
+            test_texts,
+            padding=True,
+            truncation=True,
+            max_length=self.config.max_length,
+            return_tensors="pt"
+        ).to(self.device)
+        
+        with torch.inference_mode():
+            outputs = self.model(**inputs)
+            logits = outputs.logits
+            
+            num_labels = getattr(self.model.config, "num_labels", None)
+            id2label = getattr(self.model.config, "id2label", {})
+            
+            if num_labels == 1:
+                # 单输出模型
+                probs = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+                result = {
+                    'model_type': 'single_output',
+                    'num_labels': num_labels,
+                    'test_texts': test_texts,
+                    'scores': probs.tolist(),
+                    'recommendation': 'For single output models, higher scores indicate more bias'
+                }
+            else:
+                # 多分类模型
+                probs = torch.softmax(logits, dim=-1).cpu().numpy()
+                
+                result = {
+                    'model_type': 'multi_class',
+                    'num_labels': num_labels,
+                    'id2label': id2label,
+                    'test_texts': test_texts,
+                    'probabilities': probs.tolist(),
+                    'recommendation': {}
+                }
+                
+                # 分析哪个类别在偏见句子中概率更高
+                if len(probs) >= 2:
+                    neutral_probs = probs[0]
+                    biased_probs = probs[1]
+                    
+                    for idx in range(num_labels):
+                        label = id2label.get(idx, f'LABEL_{idx}')
+                        neutral_prob = neutral_probs[idx]
+                        biased_prob = biased_probs[idx]
+                        
+                        if biased_prob > neutral_prob:
+                            result['recommendation'][idx] = {
+                                'label': label,
+                                'likely_bias_class': True,
+                                'neutral_prob': float(neutral_prob),
+                                'biased_prob': float(biased_prob),
+                                'difference': float(biased_prob - neutral_prob)
+                            }
+                        else:
+                            result['recommendation'][idx] = {
+                                'label': label,
+                                'likely_bias_class': False,
+                                'neutral_prob': float(neutral_prob),
+                                'biased_prob': float(biased_prob),
+                                'difference': float(biased_prob - neutral_prob)
+                            }
+        
+        # 打印结果
+        logger.info("=== Bias Class Verification Results ===")
+        logger.info(f"Model type: {result['model_type']}")
+        logger.info(f"Number of labels: {result['num_labels']}")
+        
+        if result['model_type'] == 'single_output':
+            logger.info(f"Scores: {result['scores']}")
+            logger.info("Higher scores indicate more bias")
+        else:
+            logger.info(f"Label mapping: {result['id2label']}")
+            logger.info("Probabilities for each test text:")
+            for i, text in enumerate(test_texts):
+                logger.info(f"  Text {i+1}: '{text[:50]}...'")
+                logger.info(f"    Probabilities: {result['probabilities'][i]}")
+            
+            logger.info("Recommendation for bias class:")
+            for idx, rec in result['recommendation'].items():
+                if rec['likely_bias_class']:
+                    logger.info(f"  ✓ Index {idx} ({rec['label']}) - likely BIAS class")
+                    logger.info(f"    Difference: {rec['difference']:.3f}")
+                else:
+                    logger.info(f"    Index {idx} ({rec['label']}) - likely neutral class")
+        
+        return result
+    
     def _setup_device(self) -> str:
         """设置计算设备"""
         if self.config.device == "auto":
@@ -108,29 +217,55 @@ class BiasTeacher:
         return [idx_to_result[i] for i in range(len(original_fragments))]
     
     def _get_bias_class_index(self) -> int:
-        """动态推断bias类的索引"""
+        """动态推断bias类的索引，优先使用配置"""
         if not hasattr(self, '_bias_class_idx'):
-            # 从模型配置中获取标签映射
-            if hasattr(self.model.config, 'id2label'):
-                id2label = self.model.config.id2label
-                
-                # 查找包含"bias"或"biased"的标签
-                for idx, label in id2label.items():
-                    if any(keyword in label.lower() for keyword in ['bias', 'biased']):
-                        self._bias_class_idx = int(idx)
-                        logger.info(f"Found bias class at index {idx}: {label}")
-                        return self._bias_class_idx
-                
-                # 如果没找到，查找包含"positive"的标签（通常bias是positive类）
-                for idx, label in id2label.items():
-                    if 'positive' in label.lower():
-                        self._bias_class_idx = int(idx)
-                        logger.warning(f"Using positive class as bias class at index {idx}: {label}")
-                        return self._bias_class_idx
+            # 1) 用户显式指定（最靠谱）
+            if getattr(self.config, "bias_class_index", None) is not None:
+                self._bias_class_idx = int(self.config.bias_class_index)
+                logger.info(f"Using configured bias class index: {self._bias_class_idx}")
+                return self._bias_class_idx
             
-            # 默认使用索引1
-            self._bias_class_idx = 1
-            logger.warning("Could not determine bias class index, using default index 1")
+            if getattr(self.config, "bias_class_name", None):
+                name = self.config.bias_class_name.lower()
+                id2label = getattr(self.model.config, "id2label", {}) or {}
+                for idx, label in id2label.items():
+                    if label.lower() == name:
+                        self._bias_class_idx = int(idx)
+                        logger.info(f"Found configured bias class '{name}' at index {idx}")
+                        return self._bias_class_idx
+                logger.warning(f"Configured bias class name '{name}' not found in model labels")
+            
+            # 2) 再走原来的"关键词猜测"
+            id2label = getattr(self.model.config, "id2label", {}) or {}
+            
+            # 先打印模型信息用于调试
+            num_labels = getattr(self.model.config, "num_labels", None)
+            logger.info(f"Model info: num_labels={num_labels}")
+            logger.info(f"id2label={id2label}")
+            logger.info(f"label2id={getattr(self.model.config, 'label2id', None)}")
+            
+            for idx, label in id2label.items():
+                if any(k in label.lower() for k in ["bias", "biased"]):
+                    self._bias_class_idx = int(idx)
+                    logger.info(f"Found bias class at index {idx}: {label}")
+                    return self._bias_class_idx
+            
+            for idx, label in id2label.items():
+                if "positive" in label.lower():
+                    self._bias_class_idx = int(idx)
+                    logger.warning(f"Using positive class as bias class at index {idx}: {label}")
+                    return self._bias_class_idx
+            
+            # 3) 最后兜底：二分类默认 1，否则报错更好（避免 silent bug）
+            if num_labels == 2:
+                self._bias_class_idx = 1
+                logger.warning("Could not determine bias class index, using default index 1")
+                return self._bias_class_idx
+            
+            raise ValueError(
+                f"Cannot determine bias class index automatically (num_labels={num_labels}). "
+                "Please set teacher.bias_class_index in config."
+            )
         
         return self._bias_class_idx
     
@@ -155,15 +290,24 @@ class BiasTeacher:
             outputs = self.model(**inputs)
             logits = outputs.logits
             
-            # 计算概率
-            probabilities = torch.softmax(logits, dim=-1)
+            # 处理不同的模型输出格式
+            num_labels = getattr(self.model.config, "num_labels", None)
             
-            # 动态推断bias类的索引
-            bias_class_idx = self._get_bias_class_index()
-            bias_scores = probabilities[:, bias_class_idx].cpu().numpy()
-            
-            # 批量计算confidence并转移到CPU (P1优化: 避免逐个转移)
-            all_confidences = torch.max(probabilities, dim=-1)[0].cpu().numpy()
+            if num_labels == 1:
+                # 单输出模型（regression/单logit），使用sigmoid
+                bias_scores = torch.sigmoid(logits.squeeze(-1)).cpu().numpy()
+                # 对于单输出模型，confidence就是预测的确定性
+                all_confidences = torch.abs(logits.squeeze(-1) - 0.5).cpu().numpy() * 2  # 转换到[0,1]
+            else:
+                # 多分类模型，使用softmax
+                probabilities = torch.softmax(logits, dim=-1)
+                
+                # 动态推断bias类的索引
+                bias_class_idx = self._get_bias_class_index()
+                bias_scores = probabilities[:, bias_class_idx].cpu().numpy()
+                
+                # 批量计算confidence并转移到CPU (P1优化: 避免逐个转移)
+                all_confidences = torch.max(probabilities, dim=-1)[0].cpu().numpy()
         
         # 组装结果
         results = []

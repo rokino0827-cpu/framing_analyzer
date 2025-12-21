@@ -35,6 +35,54 @@ def create_analyzer(config=None, enable_omission=False):
             config.omission.enabled = True
     return FramingAnalyzer(config)
 
+def create_omission_enabled_config():
+    """创建启用省略检测的配置"""
+    config = AnalyzerConfig()
+    config.omission.enabled = True
+    return config
+
+def verify_bias_class_index(model_name_or_path: str = "himel7/bias-detector", 
+                           test_texts: Optional[List[str]] = None) -> Dict:
+    """
+    验证模型的bias类别索引
+    
+    Args:
+        model_name_or_path: 模型路径或名称
+        test_texts: 测试文本列表
+        
+    Returns:
+        验证结果字典，包含推荐的bias_class_index
+    """
+    from .bias_teacher import BiasTeacher
+    from .config import TeacherConfig, AnalyzerConfig
+    
+    # 创建临时配置
+    temp_config = AnalyzerConfig()
+    temp_config.teacher.model_name = model_name_or_path
+    
+    # 创建teacher并验证
+    teacher = BiasTeacher(temp_config)
+    result = teacher.verify_bias_class_with_examples(test_texts)
+    
+    # 添加配置建议
+    if result['model_type'] == 'multi_class':
+        recommended_indices = []
+        for idx, rec in result['recommendation'].items():
+            if rec['likely_bias_class']:
+                recommended_indices.append(idx)
+        
+        if recommended_indices:
+            result['config_suggestion'] = {
+                'bias_class_index': recommended_indices[0],  # 推荐第一个
+                'all_candidates': recommended_indices
+            }
+            print(f"\n💡 Configuration suggestion:")
+            print(f"   config.teacher.bias_class_index = {recommended_indices[0]}")
+            if len(recommended_indices) > 1:
+                print(f"   Alternative indices: {recommended_indices[1:]}")
+    
+    return result
+
 def quick_analyze(text, title="", enable_omission=False):
     """快速分析单篇文章"""
     analyzer = create_analyzer(enable_omission=enable_omission)
