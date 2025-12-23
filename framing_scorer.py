@@ -301,12 +301,17 @@ class FramingAnalysisEngine:
         
         # Step 6: 计算framing强度（可能包含省略分数）
         omission_score = omission_result.omission_score if omission_result else None
-        
-        # 获取省略配置用于融合权重
+        # 获取省略配置用于融合权重和最低生效阈值
         omission_config = getattr(self.config, 'omission', None)
+        omission_effect_threshold = getattr(omission_config, 'omission_effect_threshold', None) if omission_config else None
+        omission_score_for_fusion = omission_score
+        if omission_effect_threshold is not None and omission_score is not None:
+            # 只有超过阈值的省略分数才进入最终融合
+            if omission_score < omission_effect_threshold:
+                omission_score_for_fusion = None
         
         framing_intensity = self.scorer.compute_framing_intensity(
-            zone_scores, structural_indicators, omission_score, omission_config
+            zone_scores, structural_indicators, omission_score_for_fusion, omission_config
         )
         
         # Step 7: 生成伪标签（需要先拟合阈值）
@@ -333,6 +338,8 @@ class FramingAnalysisEngine:
         if omission_result:
             statistics.update({
                 'omission_score': omission_result.omission_score,
+                'omission_score_effective': omission_score_for_fusion,
+                'omission_applied': omission_score_for_fusion is not None,
                 'key_topics_missing_count': len(omission_result.key_topics_missing),
                 'key_topics_covered_count': len(omission_result.key_topics_covered),
                 'omission_locations_count': len(omission_result.omission_locations)

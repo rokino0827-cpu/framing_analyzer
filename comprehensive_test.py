@@ -62,6 +62,7 @@ class ComprehensiveTest:
             'omission_analysis': {},
             'relative_analysis': {},
             'performance_stats': {},
+            'article_results': [],
             'errors': []
         }
     
@@ -145,9 +146,10 @@ class ComprehensiveTest:
             config.omission.key_topics_count = 10
             config.omission.similarity_threshold = 0.5
             config.omission.fusion_weight = 0.2  # 设置融合权重
-            config.omission.guidance_threshold = 0.3
+            config.omission.guidance_threshold = 0.45
+            config.omission.omission_effect_threshold = 0.4
             config.omission.min_topic_frequency = 2
-            logger.info("✅ Omission detection enabled with fusion_weight=0.2")
+            logger.info("✅ Omission detection enabled with tighter thresholds (guidance=0.45, effect>=0.4)")
         
         # 相对框架分析配置
         if self.args.enable_relative:
@@ -160,6 +162,8 @@ class ComprehensiveTest:
             'bias_class_index': config.teacher.bias_class_index,
             'omission_enabled': config.omission.enabled,
             'omission_fusion_weight': config.omission.fusion_weight if config.omission.enabled else None,
+            'omission_guidance_threshold': config.omission.guidance_threshold if config.omission.enabled else None,
+            'omission_effect_threshold': config.omission.omission_effect_threshold if config.omission.enabled else None,
             'relative_enabled': config.relative_framing.enabled,
             'batch_size': config.teacher.batch_size
         }
@@ -263,26 +267,70 @@ class ComprehensiveTest:
             
             # 统计省略检测结果 - 修复字段访问
             omission_count = 0
+            omission_scores = []
+            missing_topic_counts = []
+            applied_flags = []
+            effect_threshold = getattr(config.omission, 'omission_effect_threshold', 0.5)
             if 'results' in results and results['results']:
                 for result_dict in results['results']:
-                    if isinstance(result_dict, dict):
-                        if result_dict.get('omission_score') is not None:
+                    # 统一用dict接口
+                    if not isinstance(result_dict, dict):
+                        continue
+                    
+                    score = result_dict.get('omission_score')
+                    stats = result_dict.get('statistics', {}) if isinstance(result_dict, dict) else {}
+                    
+                    if score is not None:
+                        omission_scores.append(score)
+                        if score >= effect_threshold:
                             omission_count += 1
-                    else:
-                        # 如果是对象格式
-                        if hasattr(result_dict, 'omission_score') and result_dict.omission_score is not None:
-                            omission_count += 1
+                    
+                    if stats:
+                        missing_topic_counts.append(stats.get('key_topics_missing_count', 0))
+                        if 'omission_applied' in stats:
+                            applied_flags.append(bool(stats['omission_applied']))
+            
+            omission_score_stats = {}
+            omission_missing_stats = {}
+            if omission_scores:
+                omission_score_stats = {
+                    'mean': float(np.mean(omission_scores)),
+                    'std': float(np.std(omission_scores)),
+                    'min': float(np.min(omission_scores)),
+                    'median': float(np.median(omission_scores)),
+                    'p95': float(np.percentile(omission_scores, 95)),
+                    'max': float(np.max(omission_scores))
+                }
+            if missing_topic_counts:
+                omission_missing_stats = {
+                    'min': int(np.min(missing_topic_counts)),
+                    'median': float(np.median(missing_topic_counts)),
+                    'p95': float(np.percentile(missing_topic_counts, 95)),
+                    'max': int(np.max(missing_topic_counts))
+                }
+            applied_rate = (len([f for f in applied_flags if f]) / len(applied_flags)) if applied_flags else 0.0
             
             self.test_results['omission_analysis'] = {
                 'success': True,
                 'total_articles': len(results['results']) if results and 'results' in results else 0,
                 'articles_with_omissions': omission_count,
                 'analysis_time': analysis_time,
-                'omission_rate': omission_count / len(articles) if articles else 0
+                'omission_rate': omission_count / len(articles) if articles else 0,
+                'omission_score_stats': omission_score_stats,
+                'omission_missing_stats': omission_missing_stats,
+                'omission_applied_rate': applied_rate,
+                'omission_effect_threshold': effect_threshold
             }
             
+            # 保存每篇文章的精简结果，方便后续手动排查
+            if results and 'results' in results:
+                self.test_results['article_results'] = self._extract_article_summaries(
+                    results['results'],
+                    effect_threshold
+                )
+            
             logger.info(f"✅ Omission analysis completed in {analysis_time:.2f}s")
-            logger.info(f"📊 Omission detection rate: {omission_count}/{len(articles)}")
+            logger.info(f"📊 Omission detection rate: {omission_count}/{len(articles)} (threshold >= {effect_threshold})")
             
             return results
             
@@ -404,6 +452,27 @@ class ComprehensiveTest:
             }
             
             logger.info(f"📊 Correlation with bias labels: {correlation:.3f}")
+
+    def _extract_article_summaries(self, results: List[Dict], omission_threshold: float) -> List[Dict]:
+        """提取每篇文章的精简结果，便于调试和分布统计"""
+        summaries = []
+        threshold = omission_threshold if omission_threshold is not None else 0.0
+        for res in results:
+            stats = res.get('statistics', {}) if isinstance(res, dict) else {}
+            omission_score = res.get('omission_score') if isinstance(res, dict) else None
+            summaries.append({
+                'id': res.get('id') if isinstance(res, dict) else None,
+                'title': res.get('title') if isinstance(res, dict) else None,
+                'framing_intensity': res.get('framing_intensity') if isinstance(res, dict) else None,
+                'pseudo_label': res.get('pseudo_label') if isinstance(res, dict) else None,
+                'omission_score': omission_score,
+                'omission_score_effective': stats.get('omission_score_effective'),
+                'omission_applied': stats.get('omission_applied'),
+                'key_topics_missing_count': stats.get('key_topics_missing_count'),
+                'omission_locations_count': stats.get('omission_locations_count'),
+                'considered_omission': omission_score is not None and omission_score >= threshold
+            })
+        return summaries
     
     def save_results(self):
         """保存测试结果"""
@@ -436,7 +505,13 @@ class ComprehensiveTest:
         
         if self.test_results['omission_analysis'].get('success'):
             oa = self.test_results['omission_analysis']
-            print(f"✅ Omission Analysis: {oa['articles_with_omissions']}/{oa['total_articles']} articles with omissions")
+            print(f"✅ Omission Analysis: {oa['articles_with_omissions']}/{oa['total_articles']} articles with omissions (threshold >= {oa.get('omission_effect_threshold', 0)})")
+            if oa.get('omission_score_stats'):
+                stats = oa['omission_score_stats']
+                print(f"   Omission score median/p95: {stats.get('median', 0):.3f}/{stats.get('p95', 0):.3f}")
+            if oa.get('omission_missing_stats'):
+                miss_stats = oa['omission_missing_stats']
+                print(f"   Missing topics min/med/p95: {miss_stats.get('min', 0)}/{miss_stats.get('median', 0):.1f}/{miss_stats.get('p95', 0):.1f}")
         
         if self.test_results['relative_analysis'].get('success'):
             ra = self.test_results['relative_analysis']

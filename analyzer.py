@@ -326,14 +326,26 @@ class FramingAnalyzer:
             omission_scores = [r['omission_score'] for r in valid_results 
                              if 'omission_score' in r and r['omission_score'] is not None]
             if omission_scores:
+                omission_cfg = getattr(self.config, 'omission', None)
+                omission_effect_threshold = getattr(omission_cfg, 'omission_effect_threshold', 0.5) if omission_cfg else 0.5
+                applied_flags = [
+                    r.get('statistics', {}).get('omission_applied')
+                    for r in valid_results
+                    if r.get('statistics') and 'omission_applied' in r['statistics']
+                ]
+                applied_count = len([flag for flag in applied_flags if flag])
+                applied_rate = (applied_count / len(omission_scores) * 100) if omission_scores else 0
                 stats['omission_detection'] = {
                     'mean': np.mean(omission_scores),
                     'std': np.std(omission_scores),
                     'min': np.min(omission_scores),
                     'max': np.max(omission_scores),
                     'median': np.median(omission_scores),
-                    'articles_with_omissions': len([s for s in omission_scores if s > 0.5]),
-                    'omission_rate': len([s for s in omission_scores if s > 0.5]) / len(omission_scores) * 100
+                    'p95': np.percentile(omission_scores, 95),
+                    'articles_with_omissions': len([s for s in omission_scores if s >= omission_effect_threshold]),
+                    'omission_rate': len([s for s in omission_scores if s >= omission_effect_threshold]) / len(omission_scores) * 100,
+                    'omission_effect_threshold': omission_effect_threshold,
+                    'omission_applied_rate': applied_rate
                 }
         
         return stats

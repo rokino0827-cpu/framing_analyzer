@@ -249,6 +249,10 @@ class OmissionAwareGraphBuilder:
     
     def _add_intra_article_edges(self, graph: OmissionGraph, article_nodes: List[GraphNode]) -> None:
         """添加文内边"""
+        omission_cfg = getattr(self.config, "omission", None)
+        guidance_threshold = getattr(omission_cfg, "guidance_threshold", 0.3)
+        guidance_threshold = 0.0 if guidance_threshold is None else float(guidance_threshold)
+        
         # 按zone分组
         zone_nodes = defaultdict(list)
         for node in article_nodes:
@@ -271,11 +275,15 @@ class OmissionAwareGraphBuilder:
             for narr_node in narration_nodes[:3]:  # 只连接前3个narration节点
                 # 计算语义相似度作为权重
                 similarity = self._compute_similarity(lede_node, narr_node)
-                if similarity > 0.3:  # 阈值过滤
+                if similarity > guidance_threshold:  # 阈值过滤
                     graph.add_edge(lede_node, narr_node, "intra_guidance", similarity)
     
     def _add_inter_article_edges(self, graph: OmissionGraph, all_article_nodes: List[List[GraphNode]]) -> None:
         """添加跨文边"""
+        omission_cfg = getattr(self.config, "omission", None)
+        similarity_threshold = getattr(omission_cfg, "similarity_threshold", 0.5)
+        similarity_threshold = 0.0 if similarity_threshold is None else float(similarity_threshold)
+        
         # 收集所有节点按zone分组
         all_nodes_by_zone = defaultdict(list)
         
@@ -297,7 +305,7 @@ class OmissionAwareGraphBuilder:
                     # 确保不是同一篇文章
                     if nodes[i].article_id != nodes[j].article_id:
                         similarity = similarities[i, j]
-                        if similarity > 0.5:  # 相似度阈值
+                        if similarity > similarity_threshold:  # 相似度阈值
                             graph.add_edge(nodes[i], nodes[j], "inter_similar", similarity)
                             graph.add_edge(nodes[j], nodes[i], "inter_similar", similarity)
     

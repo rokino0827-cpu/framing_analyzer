@@ -159,6 +159,7 @@ class OmissionConfig:
     omission_weight_headline: float = 0.4  # headline省略权重
     omission_weight_lede: float = 0.4      # lede省略权重
     omission_weight_full: float = 0.2      # 全文省略权重
+    omission_effect_threshold: float = 0.35  # 最低生效的省略分数（低于则不计入融合/统计）
     
     # 证据提取配置
     max_evidence_count: int = 5       # 最大证据数量

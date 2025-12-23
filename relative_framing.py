@@ -3,9 +3,10 @@
 实现同事件相对framing分析
 """
 
+import copy
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Union
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from datetime import datetime, timedelta
@@ -17,6 +18,8 @@ class RelativeFramingAnalyzer:
     """相对框架分析器"""
     
     def __init__(self, config):
+        # 保留完整配置以便需要时触发基础分析
+        self.analyzer_config = config
         self.config = config.relative_framing
         
         # TF-IDF向量化器
@@ -26,6 +29,69 @@ class RelativeFramingAnalyzer:
             stop_words='english',
             lowercase=True
         )
+
+    def analyze_batch(self, data: Union[List[Dict], Dict], output_path: Optional[str] = None) -> Dict:
+        """批量执行相对框架分析
+        
+        兼容两类输入：
+        1) 直接传入已包含framing_intensity的结果列表或带有'results'键的结果字典
+        2) 传入原始文章列表，内部会先跑一次基础FramingAnalyzer获取分数
+        """
+
+        if not self.config.enabled:
+            logger.info("Relative framing disabled; returning original data")
+            return data if isinstance(data, dict) else {'results': data}
+
+        # 标准化输入
+        results_wrapper: Dict = {}
+        base_results: List[Dict] = []
+
+        if isinstance(data, dict) and 'results' in data:
+            results_wrapper = data
+            base_results = data.get('results', [])
+        elif isinstance(data, list):
+            base_results = data
+            results_wrapper = {'results': base_results}
+        else:
+            raise ValueError("analyze_batch expects a list of articles or a dict with 'results'")
+
+        # 如果没有framing_intensity，则先执行基础分析以获得分数
+        needs_framing = not all(isinstance(item, dict) and 'framing_intensity' in item for item in base_results)
+        if needs_framing:
+            from .analyzer import FramingAnalyzer  # 延迟导入避免循环
+
+            temp_config = copy.deepcopy(self.analyzer_config)
+            # 关闭相对分析以避免重复计算
+            temp_config.relative_framing.enabled = False
+
+            core_analyzer = FramingAnalyzer(temp_config)
+            analysis_output = core_analyzer.analyze_batch(base_results, output_path=output_path)
+            results_wrapper = analysis_output
+            base_results = analysis_output.get('results', [])
+
+        # 计算相对分数
+        scored_results = self.compute_relative_scores(base_results)
+        results_wrapper['results'] = scored_results
+
+        # 聚合簇信息与统计
+        cluster_info = EventClusterAnalyzer.analyze_clusters(scored_results)
+        extreme_cases = EventClusterAnalyzer.find_extreme_relative_cases(scored_results)
+
+        # 将簇转换为列表，便于外部统计
+        cluster_sizes: Dict[str, int] = {}
+        for result in scored_results:
+            relative_meta = result.get('relative_framing') or {}
+            cluster_id = relative_meta.get('cluster_id')
+            if cluster_id:
+                cluster_sizes[cluster_id] = cluster_sizes.get(cluster_id, 0) + 1
+
+        results_wrapper.update({
+            'clusters': [{'cluster_id': cid, 'size': size} for cid, size in cluster_sizes.items()],
+            'cluster_analysis': cluster_info,
+            'extreme_cases': extreme_cases
+        })
+
+        return results_wrapper
     
     def compute_relative_scores(self, results: List[Dict]) -> List[Dict]:
         """计算相对框架分数"""
