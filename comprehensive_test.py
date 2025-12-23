@@ -495,11 +495,14 @@ def main():
     parser = argparse.ArgumentParser(description="Comprehensive framing analyzer test")
     parser.add_argument("--sample", type=int, default=50, help="Number of articles to test (default: 50)")
     parser.add_argument("--full", action="store_true", help="Test all articles in dataset")
-    parser.add_argument("--enable-omission", action="store_true", help="Enable omission detection")
-    parser.add_argument("--enable-relative", action="store_true", help="Enable relative framing analysis")
+    parser.add_argument("--enable-omission", action="store_true", dest="enable_omission", help="Enable omission detection")
+    parser.add_argument("--disable-omission", action="store_false", dest="enable_omission", help="Disable omission detection")
+    parser.add_argument("--enable-relative", action="store_true", dest="enable_relative", help="Enable relative framing analysis")
+    parser.add_argument("--disable-relative", action="store_false", dest="enable_relative", help="Disable relative framing analysis")
     parser.add_argument("--output-dir", default="results/comprehensive_test", help="Output directory")
     parser.add_argument("--config-bias-index", type=int, default=1, help="Bias class index (default: 1)")
     
+    parser.set_defaults(enable_omission=True, enable_relative=True)
     args = parser.parse_args()
     
     # 运行测试

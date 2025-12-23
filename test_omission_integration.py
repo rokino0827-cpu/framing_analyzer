@@ -5,7 +5,10 @@
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+
+# 将仓库根目录加入sys.path，确保可以导入framing_analyzer包
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 def test_imports():
     """测试所有省略检测相关的导入"""

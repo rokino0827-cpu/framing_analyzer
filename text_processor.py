@@ -5,6 +5,7 @@
 
 import re
 import logging
+import html
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
@@ -155,6 +156,7 @@ class TextProcessor:
         # Step 1: 文本预处理
         cleaned_content = self.clean_noise_paragraphs(content)
         normalized_content = self.normalize_whitespace(cleaned_content)
+        normalized_content = html.unescape(normalized_content)
         
         # 句子切分
         sentences, positions = self.split_sentences(normalized_content)
@@ -177,18 +179,31 @@ class StructureZoneExtractor:
         
         # 编译引号模式
         self.quote_patterns = [re.compile(pattern) for pattern in self.config.quote_patterns]
+        self.quote_char_pattern = re.compile(r'[\"“”‘’「」『』]')
     
-    def extract_quotes(self, sentences: List[str]) -> List[int]:
-        """提取引号句子的索引"""
+    def extract_quote_fragments(self, sentences: List[str]) -> Tuple[List[str], List[int]]:
+        """提取引号内的片段与对应句子索引"""
+        quote_fragments: List[str] = []
         quote_indices = set()
         
         for i, sentence in enumerate(sentences):
+            sentence_matches = []
             for pattern in self.quote_patterns:
-                if pattern.search(sentence):
-                    quote_indices.add(i)
-                    break
+                for match in pattern.finditer(sentence):
+                    fragment = match.group(1).strip()
+                    if fragment:
+                        sentence_matches.append(fragment)
+            
+            if sentence_matches:
+                quote_fragments.extend(sentence_matches)
+                quote_indices.add(i)
+                continue
+            
+            # 有引号字符但未成功匹配时，仍标记句子索引防止进入Narration
+            if self.quote_char_pattern.search(sentence):
+                quote_indices.add(i)
         
-        return list(quote_indices)
+        return quote_fragments, list(quote_indices)
     
     def divide_into_zones(self, article: ProcessedArticle) -> ProcessedArticle:
         """将文章划分为结构区"""
@@ -203,8 +218,12 @@ class StructureZoneExtractor:
         lede_indices = set(range(lede_count))
         
         # Z3: Quotes (引号句子)
-        quote_indices = set(self.extract_quotes(sentences))
-        quote_sentences = [sentences[i] for i in quote_indices]
+        quote_fragments, quote_indices = self.extract_quote_fragments(sentences)
+        quote_indices = set(quote_indices)
+        # 当无法精确提取引号片段时，使用包含引号的原句作为回退，避免quote分量丢失
+        quote_sentences = quote_fragments if quote_fragments else [
+            sentences[i] for i in sorted(quote_indices)
+        ]
         
         # Z4: Narration (正文句子 - 去掉lede和引号句子，避免重叠)
         narration_sentences = [
@@ -219,7 +238,7 @@ class StructureZoneExtractor:
             "quotes": quote_sentences,
             "narration": narration_sentences
         }
-        
+
         logger.debug(f"Zone division - Headline: {len(headline_sentences)}, "
                     f"Lede: {len(lede_sentences)}, "
                     f"Quotes: {len(quote_sentences)}, "

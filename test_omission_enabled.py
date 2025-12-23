@@ -9,8 +9,8 @@ import json
 import logging
 from pathlib import Path
 
-# 设置路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 设置路径（使用绝对路径确保包导入成功）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from framing_analyzer import AnalyzerConfig, create_analyzer
 

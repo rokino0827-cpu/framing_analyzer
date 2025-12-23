@@ -17,8 +17,8 @@ from typing import Dict, List, Optional
 import pandas as pd
 import numpy as np
 
-# 设置路径
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 设置路径（使用绝对路径确保可以找到包根目录）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from framing_analyzer import AnalyzerConfig, create_analyzer
 
