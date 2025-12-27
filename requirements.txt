@@ -1,12 +1,14 @@
-# 框架偏见分析器依赖包 - AutoDL环境优化版本
+# 框架偏见分析器依赖包 - SV2000框架对齐版本
+# 更新日期: 2024-12
+# 支持功能: 传统框架分析 + SV2000框架对齐 + 多组件融合
 
 # ===== 核心深度学习框架 =====
-# PyTorch (AutoDL通常预装，但指定版本确保兼容性)
+# PyTorch (支持CUDA和CPU)
 torch>=2.0.0,<2.3.0
 torchvision>=0.15.0,<0.18.0
 torchaudio>=2.0.0,<2.3.0
 
-# Transformers生态系统
+# Transformers生态系统 (SV2000框架预测核心)
 transformers>=4.30.0,<5.0.0
 tokenizers>=0.13.0,<1.0.0
 accelerate>=0.20.0
@@ -17,21 +19,23 @@ numpy>=1.21.0,<2.0.0
 pandas>=1.3.0,<3.0.0
 scipy>=1.7.0
 
-# 机器学习
+# 机器学习 (融合权重优化)
 scikit-learn>=1.0.0,<2.0.0
 
-# 图结构处理（省略检测需要）
+# 图结构处理 (省略检测OmiGraph)
 networkx>=2.8.0
 
-# ===== 文本处理 =====
+# ===== 文本处理和NLP =====
 regex>=2022.0.0
 nltk>=3.8.0
+
+# spaCy (实体识别，省略检测可选)
 spacy>=3.4.0
 
-# 语义相似度和嵌入（省略检测需要）
+# 语义相似度和嵌入 (SV2000编码器 + 省略检测)
 sentence-transformers>=2.2.0
 
-# ===== 数据可视化 =====
+# ===== 数据可视化 (评估报告生成) =====
 matplotlib>=3.5.0,<4.0.0
 seaborn>=0.11.0,<1.0.0
 plotly>=5.0.0
@@ -40,46 +44,57 @@ plotly>=5.0.0
 tqdm>=4.60.0
 rich>=13.0.0
 
-# ===== 系统监控和性能 =====
+# ===== 系统监控和性能 (可选) =====
 psutil>=5.8.0
-GPUtil>=1.4.0
-nvidia-ml-py3>=7.352.0
+# GPU监控 (可选，仅GPU环境需要)
+# GPUtil>=1.4.0
+# nvidia-ml-py3>=7.352.0
 
 # ===== 配置和序列化 =====
 pyyaml>=6.0.0
-toml>=0.10.0
-omegaconf>=2.3.0
+# toml>=0.10.0  # 暂未使用
+# omegaconf>=2.3.0  # 暂未使用
 
 # ===== 数据格式支持 =====
-openpyxl>=3.0.0
-xlsxwriter>=3.0.0
-pyarrow>=10.0.0
-fastparquet>=0.8.0
+# Excel支持 (可选)
+# openpyxl>=3.0.0
+# xlsxwriter>=3.0.0
+
+# Parquet支持 (可选，大数据处理)
+# pyarrow>=10.0.0
+# fastparquet>=0.8.0
 
 # ===== 网络和API =====
 requests>=2.28.0
 urllib3>=1.26.0
 
-# ===== 开发和调试工具 =====
-ipython>=8.0.0
-jupyter>=1.0.0
-notebook>=6.4.0
+# ===== 开发和调试工具 (可选) =====
+# ipython>=8.0.0
+# jupyter>=1.0.0
+# notebook>=6.4.0
 
 # ===== 类型检查和代码质量 =====
 typing-extensions>=4.0.0
 
-# ===== 兼容性和稳定性 =====
-# 确保与CUDA兼容
-# 如果使用CPU版本，可以注释掉下面这行
-# --extra-index-url https://download.pytorch.org/whl/cu118
+# ===== spaCy语言模型 (实体识别) =====
+# 安装说明: 运行以下命令安装英文模型
+# python -m spacy download en_core_web_sm
 
-# ===== 可选：高级功能 =====
-# 如果需要更高级的NLP功能
-spacy-transformers>=1.2.0
+# ===== 安装说明 =====
+# 1. 基础安装: pip install -r requirements.txt
+# 2. GPU支持: 确保安装CUDA兼容的PyTorch版本
+# 3. spaCy模型: python -m spacy download en_core_web_sm
+# 4. 可选依赖: 根据需要取消注释相关包
 
-# 如果需要更好的并行处理
-# joblib>=1.2.0
-# multiprocess>=0.70.0
+# ===== SV2000特有依赖说明 =====
+# - sentence-transformers: SV2000框架编码器
+# - scikit-learn: Ridge回归权重优化
+# - matplotlib/seaborn: 评估报告可视化
+# - networkx: 省略检测图结构
+# - spacy: 实体识别 (省略检测可选功能)
 
-# 如果需要更好的内存管理
-# memory-profiler>=0.60.0
+# ===== 兼容性说明 =====
+# - 支持Python 3.8+
+# - 支持CUDA和CPU运行
+# - 向后兼容传统框架分析功能
+# - 新增SV2000框架对齐功能
