@@ -233,6 +233,22 @@ class FramingAnalyzer:
             'pseudo_label': result.pseudo_label
         }
         
+        # 添加SV2000框架分数（如果可用）
+        if hasattr(result, 'sv_conflict') and result.sv_conflict is not None:
+            formatted.update({
+                'sv_conflict': result.sv_conflict,
+                'sv_human': result.sv_human,
+                'sv_econ': result.sv_econ,
+                'sv_moral': result.sv_moral,
+                'sv_resp': result.sv_resp,
+                'sv_frame_avg': result.sv_frame_avg
+            })
+        
+        # 添加融合信息（如果可用）
+        if hasattr(result, 'fusion_weights') and result.fusion_weights is not None:
+            formatted['fusion_weights'] = result.fusion_weights
+            formatted['component_contributions'] = result.component_contributions
+        
         # 添加组件分数
         if self.config.output.include_components:
             formatted['components'] = result.components
@@ -364,6 +380,12 @@ class FramingAnalyzer:
         # 添加省略检测配置（如果存在）
         if hasattr(self.config, 'omission'):
             config_dict['omission'] = asdict(self.config.omission)
+        
+        # 添加SV2000配置（如果存在）
+        if hasattr(self.config, 'sv_framing'):
+            config_dict['sv_framing'] = asdict(self.config.sv_framing)
+        if hasattr(self.config, 'fusion'):
+            config_dict['fusion'] = asdict(self.config.fusion)
         
         return config_dict
     

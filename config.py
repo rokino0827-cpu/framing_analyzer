@@ -177,6 +177,43 @@ class OmissionConfig:
             self.entity_types = ['PERSON', 'ORG', 'GPE', 'EVENT']
 
 @dataclass
+class SVFramingConfig:
+    """SV2000框架预测配置"""
+    enabled: bool = False  # 是否启用SV2000模式
+    encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    encoder_local_path: Optional[str] = None
+    hidden_size: int = 384
+    dropout_rate: float = 0.1
+    learning_rate: float = 2e-5
+    training_mode: str = "frame_level"  # "frame_level" 或 "item_level"
+    device: str = "auto"
+    batch_size: int = 16
+    max_length: int = 512
+    
+    # 模型保存路径
+    model_save_path: str = "./sv2000_models"
+    pretrained_model_path: Optional[str] = None
+
+@dataclass
+class FusionConfig:
+    """多组件融合配置"""
+    # 默认融合权重
+    alpha: float = 0.5    # SV2000权重
+    beta: float = 0.2     # Bias-detector权重
+    gamma: float = 0.15   # Omission权重
+    delta: float = 0.1    # Relative framing权重
+    epsilon: float = 0.05 # Quote analysis权重
+    
+    # 权重约束
+    enforce_positive_weights: bool = True
+    normalize_weights: bool = True
+    
+    # 优化设置
+    use_ridge_optimization: bool = True
+    ridge_alpha: float = 1.0
+    cross_validation_folds: int = 5
+
+@dataclass
 class AnalyzerConfig:
     """主配置类"""
     processing: ProcessingConfig = None
@@ -184,7 +221,9 @@ class AnalyzerConfig:
     scoring: ScoringConfig = None
     output: OutputConfig = None
     relative_framing: RelativeFramingConfig = None
-    omission: OmissionConfig = None  # 新增省略感知配置
+    omission: OmissionConfig = None  # 省略感知配置
+    sv_framing: SVFramingConfig = None  # 新增SV2000框架配置
+    fusion: FusionConfig = None  # 新增融合配置
     
     # 全局配置
     random_seed: int = 42
@@ -204,6 +243,18 @@ class AnalyzerConfig:
             self.relative_framing = RelativeFramingConfig()
         if self.omission is None:
             self.omission = OmissionConfig()
+        if self.sv_framing is None:
+            self.sv_framing = SVFramingConfig()
+        if self.fusion is None:
+            self.fusion = FusionConfig()
+    
+    def enable_sv2000_mode(self):
+        """启用SV2000框架分析模式"""
+        self.sv_framing.enabled = True
+        
+    def disable_sv2000_mode(self):
+        """禁用SV2000框架分析模式（传统模式）"""
+        self.sv_framing.enabled = False
 
 # 默认配置实例
 default_config = AnalyzerConfig()
@@ -220,8 +271,10 @@ def load_config(config_path: str) -> AnalyzerConfig:
         output=OutputConfig(**config_dict.get('output', {})),
         relative_framing=RelativeFramingConfig(**config_dict.get('relative_framing', {})),
         omission=OmissionConfig(**config_dict.get('omission', {})),
+        sv_framing=SVFramingConfig(**config_dict.get('sv_framing', {})),
+        fusion=FusionConfig(**config_dict.get('fusion', {})),
         **{k: v for k, v in config_dict.items() 
-           if k not in ['processing', 'teacher', 'scoring', 'output', 'relative_framing', 'omission']}
+           if k not in ['processing', 'teacher', 'scoring', 'output', 'relative_framing', 'omission', 'sv_framing', 'fusion']}
     )
 
 def save_config(config: AnalyzerConfig, config_path: str):
@@ -235,6 +288,8 @@ def save_config(config: AnalyzerConfig, config_path: str):
         'output': asdict(config.output),
         'relative_framing': asdict(config.relative_framing),
         'omission': asdict(config.omission),
+        'sv_framing': asdict(config.sv_framing),
+        'fusion': asdict(config.fusion),
         'random_seed': config.random_seed,
         'verbose': config.verbose,
         'log_level': config.log_level
@@ -272,4 +327,11 @@ def create_fast_config() -> AnalyzerConfig:
     config.teacher.batch_size = 32
     config.scoring.evidence_count = 3
     config.output.include_raw_scores = False
+    return config
+
+def create_sv2000_config() -> AnalyzerConfig:
+    """创建SV2000模式配置"""
+    config = AnalyzerConfig()
+    config.enable_sv2000_mode()
+    config.fusion.use_ridge_optimization = True
     return config

@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class FramingResult:
     """框架分析结果"""
     # 主要输出
-    framing_intensity: float  # F: 0~1
+    framing_intensity: float  # F: 0~1 (在SV2000模式下为new_intensity)
     pseudo_label: str  # "positive", "negative", "uncertain"
     
     # 组件分数
@@ -26,9 +26,21 @@ class FramingResult:
     # 统计信息
     statistics: Dict[str, float]  # 各种统计量
     
-    # 省略感知结果（新增）
+    # 省略感知结果
     omission_score: Optional[float] = None  # 省略分数
     omission_evidence: Optional[List[Dict]] = None  # 省略证据
+    
+    # SV2000框架分数（新增）
+    sv_conflict: Optional[float] = None
+    sv_human: Optional[float] = None
+    sv_econ: Optional[float] = None
+    sv_moral: Optional[float] = None
+    sv_resp: Optional[float] = None
+    sv_frame_avg: Optional[float] = None
+    
+    # 融合相关（新增）
+    fusion_weights: Optional[Dict[str, float]] = None
+    component_contributions: Optional[Dict[str, float]] = None
     
     # 原始数据（可选）
     raw_scores: Optional[Dict] = None
@@ -290,11 +302,35 @@ class FramingAnalysisEngine:
         self.scorer = FramingScorer(config)
         self.label_generator = PseudoLabelGenerator(config)
         self.evidence_extractor = EvidenceExtractor(config)
+        
+        # SV2000组件（如果启用）
+        self.sv_mode = getattr(config, 'sv_framing', None) and getattr(config.sv_framing, 'enabled', False)
+        if self.sv_mode:
+            try:
+                from .sv_framing_head import SVFramingHead
+                from .fusion_scorer import FusionScorer
+                self.sv_framing_head = SVFramingHead(config.sv_framing)
+                self.fusion_scorer = FusionScorer(config.fusion)
+                logger.info("SV2000 mode enabled")
+            except ImportError as e:
+                logger.warning(f"Failed to import SV2000 components: {e}")
+                self.sv_mode = False
+        else:
+            self.sv_framing_head = None
+            self.fusion_scorer = None
     
     def analyze_article(self, zone_fragments: Dict[str, List[Dict]], 
                        omission_result=None) -> FramingResult:
         """分析单篇文章"""
         
+        if self.sv_mode and self.sv_framing_head and self.fusion_scorer:
+            return self._analyze_with_sv2000(zone_fragments, omission_result)
+        else:
+            return self._analyze_legacy(zone_fragments, omission_result)
+    
+    def _analyze_legacy(self, zone_fragments: Dict[str, List[Dict]], 
+                       omission_result=None) -> FramingResult:
+        """传统分析模式"""
         # Step 5: 计算结构区得分和指标
         zone_scores = self.scorer.compute_zone_scores(zone_fragments)
         structural_indicators = self.scorer.compute_structural_indicators(zone_fragments)
@@ -362,6 +398,114 @@ class FramingAnalysisEngine:
             omission_evidence=omission_result.evidence if omission_result else None,
             raw_scores=raw_scores
         )
+    
+    def _analyze_with_sv2000(self, zone_fragments: Dict[str, List[Dict]], 
+                            omission_result=None) -> FramingResult:
+        """SV2000分析模式"""
+        # 提取全文文本
+        full_text = self._extract_full_text(zone_fragments)
+        
+        # 主要SV2000框架预测
+        sv_scores = self.sv_framing_head.predict_frames([full_text])
+        
+        # 辅助特征提取
+        # 1. 传统偏见分数（降级为辅助特征）
+        zone_scores = self.scorer.compute_zone_scores(zone_fragments)
+        structural_indicators = self.scorer.compute_structural_indicators(zone_fragments)
+        legacy_bias_score = self.scorer.compute_framing_intensity(zone_scores, structural_indicators)
+        
+        # 2. 省略分数
+        omission_score = omission_result.omission_score if omission_result else 0.0
+        
+        # 3. 其他辅助特征（相对框架、引用分析等）
+        relative_score = 0.0  # 暂时设为0，可以从其他组件获取
+        quote_score = zone_scores.get('quotes', 0.0)
+        
+        # 收集所有特征用于融合
+        features = {
+            'sv_frame_avg_pred': sv_scores['sv_frame_avg_pred'][0],
+            'bias_score': legacy_bias_score,
+            'omission_score': omission_score,
+            'relative_score': relative_score,
+            'quote_score': quote_score
+        }
+        
+        # 多组件融合
+        fusion_result = self.fusion_scorer.compute_fusion_score(features)
+        
+        # 生成伪标签
+        pseudo_label = self.label_generator.generate_pseudo_label(fusion_result.final_intensity)
+        
+        # 提取证据片段
+        evidence = self.evidence_extractor.extract_evidence(zone_fragments)
+        
+        # 组装SV2000结果
+        components = {
+            'headline': zone_scores.get('headline', 0.0),
+            'lede': zone_scores.get('lede', 0.0),
+            'narration': zone_scores.get('narration', 0.0),
+            'quotes': zone_scores.get('quotes', 0.0)
+        }
+        
+        statistics = {
+            **structural_indicators,
+            'total_fragments': sum(len(fragments) for fragments in zone_fragments.values()),
+            'zones_with_content': len([z for z, f in zone_fragments.items() if f]),
+            'sv2000_mode': True,
+            'fusion_applied': True
+        }
+        
+        # 添加省略相关统计
+        if omission_result:
+            statistics.update({
+                'omission_score': omission_result.omission_score,
+                'key_topics_missing_count': len(omission_result.key_topics_missing),
+                'key_topics_covered_count': len(omission_result.key_topics_covered),
+                'omission_locations_count': len(omission_result.omission_locations)
+            })
+        
+        raw_scores = {
+            'zone_fragments': zone_fragments,
+            'zone_scores': zone_scores,
+            'structural_indicators': structural_indicators,
+            'sv_scores': sv_scores,
+            'fusion_result': fusion_result,
+            'omission_result': omission_result
+        } if self.config.output.include_raw_scores else None
+        
+        return FramingResult(
+            framing_intensity=fusion_result.final_intensity,  # 新的融合分数
+            pseudo_label=pseudo_label,
+            components=components,
+            evidence=evidence,
+            statistics=statistics,
+            omission_score=omission_score,
+            omission_evidence=omission_result.evidence if omission_result else None,
+            # SV2000特有字段
+            sv_conflict=sv_scores['sv_conflict_pred'][0],
+            sv_human=sv_scores['sv_human_pred'][0],
+            sv_econ=sv_scores['sv_econ_pred'][0],
+            sv_moral=sv_scores['sv_moral_pred'][0],
+            sv_resp=sv_scores['sv_resp_pred'][0],
+            sv_frame_avg=sv_scores['sv_frame_avg_pred'][0],
+            fusion_weights=fusion_result.fusion_weights,
+            component_contributions=fusion_result.component_contributions,
+            raw_scores=raw_scores
+        )
+    
+    def _extract_full_text(self, zone_fragments: Dict[str, List[Dict]]) -> str:
+        """从zone fragments提取全文文本"""
+        all_texts = []
+        
+        # 按zone顺序提取文本
+        for zone in ['headline', 'lede', 'narration', 'quotes']:
+            if zone in zone_fragments:
+                for fragment in zone_fragments[zone]:
+                    text = fragment.get('text', '').strip()
+                    if text:
+                        all_texts.append(text)
+        
+        return ' '.join(all_texts)
     
     def fit_pseudo_label_thresholds(self, framing_scores: List[float]):
         """拟合伪标签阈值"""
