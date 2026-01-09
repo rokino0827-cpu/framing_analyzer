@@ -107,11 +107,17 @@ class SV2000DataLoader:
         mapping = {}
         
         # 内容列检测
-        content_candidates = [col for col in columns if any(keyword in col.lower() 
-                            for keyword in ['content', 'text', 'article', 'body'])]
-        if content_candidates:
-            mapping['content'] = content_candidates[0]
-            logger.info(f"Detected content column: {content_candidates[0]}")
+        # 优先精确匹配 content/text，再退化到包含 article 的列，避免误选 article_id
+        content_priority = [col for col in columns if col.lower() in ['content', 'text']]
+        if content_priority:
+            mapping['content'] = content_priority[0]
+            logger.info(f"Detected content column: {content_priority[0]}")
+        else:
+            content_candidates = [col for col in columns if any(keyword in col.lower() 
+                                for keyword in ['content', 'text', 'article', 'body'])]
+            if content_candidates:
+                mapping['content'] = content_candidates[0]
+                logger.info(f"Detected content column: {content_candidates[0]}")
         
         # 标题列检测
         title_candidates = [col for col in columns if any(keyword in col.lower() 

@@ -194,6 +194,22 @@ class SVFramingConfig:
     model_save_path: str = "./sv2000_models"
     pretrained_model_path: Optional[str] = None
 
+    def __post_init__(self):
+        """
+        优先使用本地sentence-transformers副本，避免离线环境拉取失败；
+        同时将相对路径解析为仓库内绝对路径。
+        """
+        if not self.encoder_local_path:
+            local_dir = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
+            if local_dir.exists():
+                self.encoder_local_path = str(local_dir)
+        else:
+            path_obj = Path(self.encoder_local_path)
+            if not path_obj.is_absolute():
+                candidate = Path(__file__).resolve().parent / path_obj
+                if candidate.exists():
+                    self.encoder_local_path = str(candidate)
+
 @dataclass
 class FusionConfig:
     """多组件融合配置"""

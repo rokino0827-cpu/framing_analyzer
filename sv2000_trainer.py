@@ -24,11 +24,13 @@ class SVFramingTrainer:
     """SV2000框架预测训练器"""
     
     def __init__(self, config):
-        self.config = config
+        # 仅保留SV框架相关配置，避免直接依赖AnalyzerConfig顶层属性
+        self.config = config.sv_framing if hasattr(config, "sv_framing") else config
+        self.analyzer_config = config
         self.device = self._setup_device()
         
         # 初始化模型
-        self.model = SVFramingHead(config)
+        self.model = SVFramingHead(self.config)
         
         # 初始化优化器和损失函数
         self.optimizer = self._setup_optimizer()
@@ -128,7 +130,7 @@ class SVFramingTrainer:
                 val_metrics = self.evaluate(val_texts, val_targets)
                 val_loss = val_metrics['loss']
                 val_correlation = val_metrics['avg_correlation']
-                
+
                 history['val_loss'].append(val_loss)
                 history['val_correlation'].append(val_correlation)
                 
@@ -139,6 +141,7 @@ class SVFramingTrainer:
                 
                 logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, "
                            f"Val Correlation: {val_correlation:.4f}, LR: {current_lr:.6f}")
+                self._log_prediction_stats(val_metrics, split="val")
                 
                 # 早停检查
                 if val_correlation > self.best_val_correlation:
@@ -188,7 +191,7 @@ class SVFramingTrainer:
     def evaluate(self, texts: List[str], targets: np.ndarray) -> Dict:
         """评估模型性能"""
         self.model.eval_mode()
-        
+
         # 预测
         predictions = self.model.predict_frames(texts)
         
@@ -202,7 +205,11 @@ class SVFramingTrainer:
         # 计算评估指标
         metrics = self._compute_metrics(predictions, targets)
         metrics['loss'] = loss
-        
+
+        # 诊断：预测均值和方差，用于检测塌缩到常数预测
+        metrics['pred_stats'] = self._prediction_stats(predictions)
+        metrics['target_stats'] = self._target_stats(targets)
+
         return metrics
     
     def _compute_metrics(self, predictions: Dict[str, np.ndarray], 
@@ -261,6 +268,55 @@ class SVFramingTrainer:
                 metrics['frame_avg_mae'] = avg_mae
         
         return metrics
+
+    @staticmethod
+    def _prediction_stats(predictions: Dict[str, np.ndarray]) -> Dict[str, Dict[str, float]]:
+        """统计预测均值/方差，辅助诊断模型塌缩"""
+        stats = {}
+        for key, values in predictions.items():
+            if isinstance(values, np.ndarray) and values.size > 0:
+                stats[key] = {
+                    'mean': float(np.mean(values)),
+                    'std': float(np.std(values))
+                }
+        return stats
+
+    @staticmethod
+    def _target_stats(targets: np.ndarray) -> Dict[str, Dict[str, float]]:
+        """统计标签均值/方差，便于对比"""
+        frame_names = ['conflict', 'human', 'econ', 'moral', 'resp']
+        stats = {}
+        if targets is None or len(targets) == 0:
+            return stats
+
+        for idx, frame in enumerate(frame_names):
+            if idx < targets.shape[1]:
+                col = targets[:, idx]
+                stats[frame] = {
+                    'mean': float(np.mean(col)),
+                    'std': float(np.std(col))
+                }
+        # 框架平均
+        stats['frame_avg'] = {
+            'mean': float(np.mean(targets)),
+            'std': float(np.std(targets))
+        }
+        return stats
+
+    def _log_prediction_stats(self, metrics: Dict, split: str = "val"):
+        """日志输出预测/标签分布统计，方便快速诊断"""
+        pred_stats = metrics.get('pred_stats', {})
+        target_stats = metrics.get('target_stats', {})
+        if not pred_stats:
+            return
+
+        logger.info(f"[{split}] Prediction stats (mean/std):")
+        for key, vals in pred_stats.items():
+            logger.info(f"  {key}: mean={vals.get('mean', 0):.4f}, std={vals.get('std', 0):.4f}")
+        if target_stats:
+            logger.info(f"[{split}] Target stats (mean/std):")
+            for key, vals in target_stats.items():
+                logger.info(f"  {key}: mean={vals.get('mean', 0):.4f}, std={vals.get('std', 0):.4f}")
     
     def _save_best_model(self):
         """保存最佳模型"""
@@ -294,7 +350,14 @@ class SV2000TrainingPipeline:
         self.trainer = SVFramingTrainer(config)
         self.weight_optimizer = FusionWeightOptimizer(config.fusion)
         
-    def run_full_training(self, num_epochs: int = 10) -> Dict:
+    def run_full_training(
+        self, 
+        num_epochs: int = 10, 
+        validation_split: float = 0.2,
+        test_split: float = 0.0,
+        early_stopping_patience: int = 5,
+        save_best_model: bool = True
+    ) -> Dict:
         """运行完整训练管道"""
         logger.info("Starting full SV2000 training pipeline")
         
@@ -304,6 +367,9 @@ class SV2000TrainingPipeline:
             logger.error(f"Data validation failed: {validation_results['issues']}")
             raise ValueError("Invalid training data format")
         
+        # 2. 数据分割（显式使用传入的验证比例，避免硬编码）
+        self.data_loader.create_train_val_split(val_ratio=validation_split, test_ratio=test_split)
+        
         # 2. 数据统计
         data_stats = self.data_loader.get_data_statistics()
         logger.info(f"Dataset statistics: {data_stats}")
@@ -312,16 +378,22 @@ class SV2000TrainingPipeline:
         training_history = self.trainer.train(
             self.data_loader, 
             num_epochs=num_epochs,
-            save_best=True
+            save_best=save_best_model,
+            patience=early_stopping_patience
         )
         
         # 4. 评估最终模型
         val_texts, val_targets = self.data_loader.get_training_data(split="val")
+        test_texts, test_targets = self.data_loader.get_training_data(split="test")
+
+        final_metrics = {}
         if val_texts:
-            final_metrics = self.trainer.evaluate(val_texts, val_targets)
-            logger.info(f"Final validation metrics: {final_metrics}")
-        else:
-            final_metrics = {}
+            final_metrics['val'] = self.trainer.evaluate(val_texts, val_targets)
+            logger.info(f"Final validation metrics: {final_metrics['val']}")
+
+        if test_texts:
+            final_metrics['test'] = self.trainer.evaluate(test_texts, test_targets)
+            logger.info(f"Test metrics: {final_metrics['test']}")
         
         # 5. 优化融合权重（如果有足够数据）
         optimized_weights = {}

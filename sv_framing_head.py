@@ -45,17 +45,45 @@ class SVFramingHead:
             # 加载编码器（优先使用本地路径）
             encoder_path = self.config.encoder_local_path or self.config.encoder_name
             logger.info(f"Loading encoder from: {encoder_path}")
-            
+
             if "sentence-transformers" in self.config.encoder_name or "all-MiniLM" in self.config.encoder_name:
                 # 使用sentence-transformers
                 self.encoder = SentenceTransformer(encoder_path)
                 self.encoder.to(self.device)
+                # 限制最大序列长度，避免长文本超出模型位置嵌入
+                requested_max_length = getattr(self.config, "max_length", 512)
+                model_max_length = self._infer_model_max_length(self.encoder)
+                effective_max_length = min(requested_max_length, model_max_length)
+                if requested_max_length > model_max_length:
+                    logger.warning(
+                        "Requested max_length %s exceeds encoder limit %s; using %s instead",
+                        requested_max_length,
+                        model_max_length,
+                        effective_max_length,
+                    )
+                self.encoder.max_seq_length = effective_max_length
+                # 暴露tokenizer供长度统计使用，并同步最大长度
+                self.tokenizer = getattr(self.encoder, "tokenizer", None)
+                if self.tokenizer is not None and hasattr(self.tokenizer, "model_max_length"):
+                    self.tokenizer.model_max_length = effective_max_length
                 hidden_size = self.encoder.get_sentence_embedding_dimension()
             else:
                 # 使用标准transformers
                 self.tokenizer = AutoTokenizer.from_pretrained(encoder_path, local_files_only=True)
                 self.encoder = AutoModel.from_pretrained(encoder_path, local_files_only=True)
                 self.encoder.to(self.device)
+                requested_max_length = getattr(self.config, "max_length", 512)
+                model_max_length = self._infer_model_max_length(self.encoder)
+                effective_max_length = min(requested_max_length, model_max_length)
+                if requested_max_length > model_max_length:
+                    logger.warning(
+                        "Requested max_length %s exceeds encoder limit %s; using %s instead",
+                        requested_max_length,
+                        model_max_length,
+                        effective_max_length,
+                    )
+                if hasattr(self.tokenizer, "model_max_length"):
+                    self.tokenizer.model_max_length = effective_max_length
                 hidden_size = self.encoder.config.hidden_size
             
             # 创建框架分类器
@@ -73,6 +101,33 @@ class SVFramingHead:
         except Exception as e:
             logger.error(f"Failed to load SV2000 components: {e}")
             raise
+
+    def _infer_model_max_length(self, encoder) -> int:
+        """推断编码器允许的最大长度，避免超出位置嵌入"""
+        candidates = []
+
+        tokenizer = getattr(encoder, "tokenizer", None)
+        if tokenizer is not None and hasattr(tokenizer, "model_max_length"):
+            candidates.append(tokenizer.model_max_length)
+
+        auto_model = getattr(encoder, "auto_model", None)
+        if auto_model is not None and hasattr(auto_model, "config"):
+            max_pos = getattr(auto_model.config, "max_position_embeddings", None)
+            if max_pos is not None:
+                candidates.append(max_pos)
+
+        # SentenceTransformer没有auto_model时，尝试直接读取config
+        model_config = getattr(encoder, "config", None)
+        if model_config is not None:
+            max_pos = getattr(model_config, "max_position_embeddings", None)
+            if max_pos is not None:
+                candidates.append(max_pos)
+
+        valid_candidates = [c for c in candidates if isinstance(c, int) and c > 0 and c < 1_000_000]
+        if not valid_candidates:
+            return getattr(self.config, "max_length", 512)
+
+        return min(valid_candidates)
     
     def predict_frames(self, texts: List[str]) -> Dict[str, np.ndarray]:
         """预测SV2000框架分数

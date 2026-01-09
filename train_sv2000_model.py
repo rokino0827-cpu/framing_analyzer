@@ -6,10 +6,12 @@ SV2000模型训练脚本
 
 import os
 import sys
+import json
 import argparse
 import logging
 from pathlib import Path
 from typing import Dict, Any
+import numpy as np
 
 # 添加项目路径
 sys.path.append(str(Path(__file__).parent.parent))
@@ -26,6 +28,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class NpEncoder(json.JSONEncoder):
+    """JSON编码器，安全处理numpy类型"""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
 def create_training_config(args) -> AnalyzerConfig:
     """创建训练配置"""
     config = create_sv2000_config()
@@ -37,6 +50,7 @@ def create_training_config(args) -> AnalyzerConfig:
     config.sv_framing.training_mode = args.training_mode
     config.sv_framing.device = args.device
     config.sv_framing.model_save_path = args.output_dir
+    config.sv_framing.max_length = args.max_length
     
     # 编码器配置
     if args.encoder_name:
@@ -63,11 +77,12 @@ def validate_data(data_path: str, config: AnalyzerConfig) -> Dict[str, Any]:
     
     # 验证数据格式
     validation_results = data_loader.validate_annotation_format()
-    
+
     logger.info("数据验证结果:")
     logger.info(f"  总样本数: {validation_results['total_samples']}")
     logger.info(f"  有效样本数: {validation_results['valid_samples']}")
-    logger.info(f"  缺失字段: {validation_results['missing_fields']}")
+    missing_fields = validation_results.get('missing_fields', [])
+    logger.info(f"  缺失字段: {missing_fields}")
     
     if validation_results['valid_samples'] == 0:
         raise ValueError("没有有效的训练样本")
@@ -99,15 +114,15 @@ def train_model(args):
     training_report = trainer.run_full_training(
         num_epochs=args.epochs,
         validation_split=args.validation_split,
+        test_split=args.test_split,
         early_stopping_patience=args.early_stopping_patience,
         save_best_model=True
     )
     
     # 保存训练报告
     report_path = os.path.join(args.output_dir, "training_report.json")
-    import json
     with open(report_path, 'w', encoding='utf-8') as f:
-        json.dump(training_report, f, indent=2, ensure_ascii=False)
+        json.dump(training_report, f, indent=2, ensure_ascii=False, cls=NpEncoder)
     
     logger.info(f"训练报告已保存: {report_path}")
     
@@ -183,8 +198,12 @@ def main():
                        help="Dropout率")
     parser.add_argument("--validation_split", type=float, default=0.2,
                        help="验证集比例")
+    parser.add_argument("--test_split", type=float, default=0.1,
+                       help="测试集比例")
     parser.add_argument("--early_stopping_patience", type=int, default=3,
                        help="早停耐心值")
+    parser.add_argument("--max_length", type=int, default=512,
+                       help="编码器最大序列长度，控制截断")
     
     # 模型参数
     parser.add_argument("--encoder_name", type=str, 
