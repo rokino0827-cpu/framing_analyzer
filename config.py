@@ -184,11 +184,21 @@ class SVFramingConfig:
     encoder_local_path: Optional[str] = None
     hidden_size: int = 384
     dropout_rate: float = 0.1
-    learning_rate: float = 2e-5
+    # 优化与训练
+    learning_rate: float = 2e-5  # 向后兼容：作为默认编码器学习率
+    encoder_learning_rate: float = 2e-5
+    # 运行实证最优：若未显式指定，则回落到max(learning_rate, 1e-3)
+    head_learning_rate: Optional[float] = None
     training_mode: str = "frame_level"  # "frame_level" 或 "item_level"
     device: str = "auto"
     batch_size: int = 16
     max_length: int = 512
+    fine_tune_encoder: bool = False
+    max_grad_norm: float = 1.0
+    # 类别不平衡与标定
+    frame_loss_weights: Optional[Dict[str, float]] = None  # 可对单个框架加权，默认强化moral/resp
+    calibration_max_iter: int = 50
+    calibration_lr: float = 0.01
     
     # 模型保存路径
     model_save_path: str = "./sv2000_models"
@@ -209,6 +219,13 @@ class SVFramingConfig:
                 candidate = Path(__file__).resolve().parent / path_obj
                 if candidate.exists():
                     self.encoder_local_path = str(candidate)
+
+        # 确保学习率配置兼容旧字段
+        if getattr(self, "encoder_learning_rate", None) is None:
+            self.encoder_learning_rate = self.learning_rate
+        if getattr(self, "head_learning_rate", None) is None:
+            # 头部默认更大学习率以便快速收敛（恢复run3配置：1e-3基准）
+            self.head_learning_rate = max(self.learning_rate, 1e-3)
 
 @dataclass
 class FusionConfig:

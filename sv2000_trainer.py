@@ -34,12 +34,15 @@ class SVFramingTrainer:
         
         # 初始化优化器和损失函数
         self.optimizer = self._setup_optimizer()
-        self.criterion = self._setup_loss_function()
+        self.criterion = None  # 根据训练数据动态设置
         self.scheduler = self._setup_scheduler()
+        self.frame_loss_weights = self._build_frame_loss_weights()
         
         # 训练状态
         self.best_val_loss = float('inf')
         self.best_val_correlation = -1.0
+        self.best_val_metrics = None
+        self.best_epoch = None
         self.patience_counter = 0
         
         logger.info("SVFramingTrainer initialized")
@@ -59,16 +62,61 @@ class SVFramingTrainer:
     
     def _setup_optimizer(self):
         """设置优化器"""
-        return optim.AdamW(
-            self.model.frame_classifier.parameters(),
-            lr=self.config.learning_rate,
-            weight_decay=0.01
-        )
+        param_groups = []
+        head_params = list(self.model.frame_classifier.parameters())
+        if head_params:
+            param_groups.append({
+                'params': head_params,
+                'lr': getattr(self.config, "head_learning_rate", self.config.learning_rate),
+                'weight_decay': 0.01
+            })
+
+        if getattr(self.config, "fine_tune_encoder", False) and hasattr(self.model, "encoder"):
+            encoder_params = [p for p in self.model.encoder.parameters() if p.requires_grad]
+            if encoder_params:
+                param_groups.append({
+                    'params': encoder_params,
+                    'lr': getattr(self.config, "encoder_learning_rate", self.config.learning_rate),
+                    'weight_decay': 0.01
+                })
+            else:
+                logger.warning("fine_tune_encoder 已启用但未找到可训练的编码器参数")
+
+        base_lr = getattr(self.config, "head_learning_rate", self.config.learning_rate)
+        return optim.AdamW(param_groups, lr=base_lr, weight_decay=0.01)
     
-    def _setup_loss_function(self):
+    def _setup_loss_function(self, pos_weight: Optional[torch.Tensor] = None):
         """设置损失函数"""
         # 使用BCEWithLogitsLoss用于多标签分类
-        return nn.BCEWithLogitsLoss()
+        if pos_weight is not None:
+            pos_weight = pos_weight.to(self.device)
+            logger.info("Using pos_weight for BCEWithLogitsLoss: %s", pos_weight.tolist())
+        return nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
+
+    def _build_frame_loss_weights(self) -> torch.Tensor:
+        """为每个框架构建损失权重，默认提升moral/resp关注度"""
+        base_weights = {
+            'conflict': 1.0,
+            'human': 1.0,
+            'econ': 1.0,
+            'moral': 1.6,
+            'resp': 1.4
+        }
+        custom_weights = getattr(self.config, "frame_loss_weights", None) or {}
+        frame_order = ['conflict', 'human', 'econ', 'moral', 'resp']
+        weights = [custom_weights.get(name, base_weights[name]) for name in frame_order]
+        logger.info("Frame loss weights applied: %s", weights)
+        return torch.tensor(weights, dtype=torch.float32, device=self.device)
+
+    def _compute_pos_weight(self, targets: np.ndarray) -> Optional[torch.Tensor]:
+        """根据训练集标签计算pos_weight，缓解正负样本失衡"""
+        if targets is None or len(targets) == 0:
+            return None
+
+        positive_counts = np.clip(targets.sum(axis=0), 1e-6, None)
+        negative_counts = np.clip((1 - targets).sum(axis=0), 1e-6, None)
+        pos_weight = negative_counts / positive_counts
+        return torch.tensor(pos_weight, dtype=torch.float32)
     
     def _setup_scheduler(self):
         """设置学习率调度器"""
@@ -108,6 +156,10 @@ class SVFramingTrainer:
         
         logger.info(f"Training samples: {len(train_texts)}")
         logger.info(f"Validation samples: {len(val_texts)}")
+
+        # 根据训练集动态设置loss（包含pos_weight）
+        pos_weight = self._compute_pos_weight(train_targets)
+        self.criterion = self._setup_loss_function(pos_weight)
         
         # 训练历史
         history = {
@@ -147,6 +199,8 @@ class SVFramingTrainer:
                 if val_correlation > self.best_val_correlation:
                     self.best_val_correlation = val_correlation
                     self.best_val_loss = val_loss
+                    self.best_val_metrics = val_metrics
+                    self.best_epoch = epoch + 1
                     self.patience_counter = 0
                     
                     if save_best:
@@ -163,6 +217,9 @@ class SVFramingTrainer:
         logger.info("Training completed")
         logger.info(f"Best validation correlation: {self.best_val_correlation:.4f}")
         
+        history['best_epoch'] = self.best_epoch
+        history['best_val_loss'] = self.best_val_loss if self.best_val_loss != float('inf') else None
+        history['best_val_correlation'] = self.best_val_correlation if self.best_val_correlation != -1.0 else None
         return history
     
     def _train_epoch(self, texts: List[str], targets: np.ndarray) -> float:
@@ -173,14 +230,16 @@ class SVFramingTrainer:
         
         # 创建批次
         batch_size = self.config.batch_size
-        for i in tqdm(range(0, len(texts), batch_size), desc="Training"):
-            batch_texts = texts[i:i + batch_size]
-            batch_targets = targets[i:i + batch_size]
+        indices = np.random.permutation(len(texts))
+        for start in tqdm(range(0, len(indices), batch_size), desc="Training"):
+            batch_idx = indices[start:start + batch_size]
+            batch_texts = [texts[j] for j in batch_idx]
+            batch_targets = targets[batch_idx]
             
             # 训练步骤
             loss = self.model.train_step(
                 batch_texts, batch_targets, 
-                self.optimizer, self.criterion
+                self.optimizer, lambda logits, t: self._calculate_loss(logits, t)
             )
             
             total_loss += loss
@@ -190,6 +249,9 @@ class SVFramingTrainer:
     
     def evaluate(self, texts: List[str], targets: np.ndarray) -> Dict:
         """评估模型性能"""
+        if self.criterion is None:
+            self.criterion = self._setup_loss_function()
+
         self.model.eval_mode()
 
         # 预测
@@ -200,7 +262,7 @@ class SVFramingTrainer:
             embeddings = self.model._encode_texts(texts)
             logits = self.model.frame_classifier(embeddings)
             targets_tensor = torch.FloatTensor(targets).to(self.device)
-            loss = self.criterion(logits, targets_tensor).item()
+            loss = self._calculate_loss(logits, targets_tensor).item()
         
         # 计算评估指标
         metrics = self._compute_metrics(predictions, targets)
@@ -211,6 +273,15 @@ class SVFramingTrainer:
         metrics['target_stats'] = self._target_stats(targets)
 
         return metrics
+
+    def _calculate_loss(self, logits: torch.Tensor, targets_tensor: torch.Tensor) -> torch.Tensor:
+        """应用正负样本权重与框架加权后的最终loss"""
+        raw_loss = self.criterion(logits, targets_tensor)
+        if raw_loss.dim() > 1:
+            # raw_loss: (batch, 5)
+            weighted = raw_loss * self.frame_loss_weights
+            return weighted.mean()
+        return raw_loss
     
     def _compute_metrics(self, predictions: Dict[str, np.ndarray], 
                         targets: np.ndarray) -> Dict:
@@ -315,8 +386,8 @@ class SVFramingTrainer:
             logger.info(f"  {key}: mean={vals.get('mean', 0):.4f}, std={vals.get('std', 0):.4f}")
         if target_stats:
             logger.info(f"[{split}] Target stats (mean/std):")
-            for key, vals in target_stats.items():
-                logger.info(f"  {key}: mean={vals.get('mean', 0):.4f}, std={vals.get('std', 0):.4f}")
+        for key, vals in target_stats.items():
+            logger.info(f"  {key}: mean={vals.get('mean', 0):.4f}, std={vals.get('std', 0):.4f}")
     
     def _save_best_model(self):
         """保存最佳模型"""
@@ -337,6 +408,52 @@ class SVFramingTrainer:
         """从指定路径加载模型"""
         self.model.load_model(path)
         logger.info(f"Model loaded from {path}")
+
+    def calibrate_with_temperature(self, texts: List[str], targets: np.ndarray) -> Optional[Dict]:
+        """使用验证集进行温度标定，缓解整体预测偏高"""
+        if not texts:
+            logger.warning("No texts provided for calibration")
+            return None
+
+        self.model.eval_mode()
+        logits = self._collect_logits(texts)
+        targets_tensor = torch.FloatTensor(targets).to(self.device)
+
+        temperature = torch.ones(logits.shape[1], device=self.device, requires_grad=True)
+        bce = nn.BCEWithLogitsLoss(reduction='mean')
+        lr = getattr(self.config, "calibration_lr", 0.01)
+        max_iter = getattr(self.config, "calibration_max_iter", 50)
+        optimizer = torch.optim.LBFGS([temperature], lr=lr, max_iter=max_iter)
+
+        def closure():
+            optimizer.zero_grad()
+            scaled_logits = logits / temperature.clamp(min=1e-3)
+            loss = bce(scaled_logits, targets_tensor)
+            loss.backward()
+            return loss
+
+        optimizer.step(closure)
+        optimized_temp = temperature.detach().clamp(min=1e-3)
+        self.model.set_temperature(optimized_temp)
+
+        with torch.no_grad():
+            calibrated_loss = bce(logits / optimized_temp, targets_tensor).item()
+
+        logger.info("Calibration done. Temperature: %s, calibrated_loss: %.4f",
+                    optimized_temp.cpu().tolist(), calibrated_loss)
+        return {
+            "temperature": optimized_temp.cpu().tolist(),
+            "calibrated_loss": calibrated_loss,
+            "optimizer": "LBFGS",
+            "max_iter": max_iter
+        }
+
+    def _collect_logits(self, texts: List[str]) -> torch.Tensor:
+        """获取未标定的logits供标定或分析使用"""
+        embeddings = self.model._encode_texts(texts)
+        with torch.no_grad():
+            logits = self.model.frame_classifier(embeddings)
+        return logits
 
 class SV2000TrainingPipeline:
     """SV2000完整训练管道"""
@@ -386,6 +503,11 @@ class SV2000TrainingPipeline:
         val_texts, val_targets = self.data_loader.get_training_data(split="val")
         test_texts, test_targets = self.data_loader.get_training_data(split="test")
 
+        # 4.1 温度标定（优先使用验证集）
+        calibration_report = None
+        if val_texts:
+            calibration_report = self.trainer.calibrate_with_temperature(val_texts, val_targets)
+
         final_metrics = {}
         if val_texts:
             final_metrics['val'] = self.trainer.evaluate(val_texts, val_targets)
@@ -412,7 +534,12 @@ class SV2000TrainingPipeline:
             'training_history': training_history,
             'final_metrics': final_metrics,
             'optimized_weights': optimized_weights,
-            'validation_results': validation_results
+            'validation_results': validation_results,
+            'best_epoch': self.trainer.best_epoch,
+            'best_val_correlation': self.trainer.best_val_correlation if self.trainer.best_val_correlation != -1.0 else None,
+            'best_val_loss': self.trainer.best_val_loss if self.trainer.best_val_loss != float('inf') else None,
+            'best_val_metrics': self.trainer.best_val_metrics,
+            'calibration': calibration_report
         }
         
         logger.info("Full training pipeline completed")

@@ -158,6 +158,12 @@ class FusionWeightOptimizer:
             
             # 权重后处理
             optimized_weights = self._postprocess_weights(optimized_weights)
+
+            # 防御性检查：若权重为零或非有限值，回退默认权重
+            weights_array = np.array(list(optimized_weights.values()), dtype=float)
+            if not np.isfinite(weights_array).all() or np.sum(np.abs(weights_array)) <= 1e-8:
+                logger.warning("Optimized weights are degenerate (zero or non-finite), falling back to defaults")
+                return self._get_default_weights()
             
             # 交叉验证评估
             cv_scores = cross_val_score(ridge, X, y, cv=min(self.cv_folds, X.shape[0]))

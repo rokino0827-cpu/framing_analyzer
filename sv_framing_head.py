@@ -18,6 +18,8 @@ class SVFramingHead:
     def __init__(self, config):
         self.config = config
         self.device = self._setup_device()
+        self.encoder_backend = None  # 用于日志展示当前编码器类型
+        self.temperature = torch.ones(5, device=self.device)
         
         # 加载编码器和分类器
         self.encoder = None
@@ -42,12 +44,18 @@ class SVFramingHead:
     def _load_components(self):
         """加载编码器和分类器组件"""
         try:
+            use_sentence_transformers = (
+                not getattr(self.config, "fine_tune_encoder", False)
+                and ("sentence-transformers" in self.config.encoder_name or "all-MiniLM" in self.config.encoder_name)
+            )
+
             # 加载编码器（优先使用本地路径）
             encoder_path = self.config.encoder_local_path or self.config.encoder_name
             logger.info(f"Loading encoder from: {encoder_path}")
 
-            if "sentence-transformers" in self.config.encoder_name or "all-MiniLM" in self.config.encoder_name:
+            if use_sentence_transformers:
                 # 使用sentence-transformers
+                self.encoder_backend = "sentence_transformers"
                 self.encoder = SentenceTransformer(encoder_path)
                 self.encoder.to(self.device)
                 # 限制最大序列长度，避免长文本超出模型位置嵌入
@@ -69,6 +77,7 @@ class SVFramingHead:
                 hidden_size = self.encoder.get_sentence_embedding_dimension()
             else:
                 # 使用标准transformers
+                self.encoder_backend = "transformers"
                 self.tokenizer = AutoTokenizer.from_pretrained(encoder_path, local_files_only=True)
                 self.encoder = AutoModel.from_pretrained(encoder_path, local_files_only=True)
                 self.encoder.to(self.device)
@@ -85,6 +94,14 @@ class SVFramingHead:
                 if hasattr(self.tokenizer, "model_max_length"):
                     self.tokenizer.model_max_length = effective_max_length
                 hidden_size = self.encoder.config.hidden_size
+
+            # 如果需要微调且使用sentence-transformers，提醒限制
+            if getattr(self.config, "fine_tune_encoder", False) and self.encoder_backend == "sentence_transformers":
+                logger.warning("fine_tune_encoder 启用但当前编码器为 sentence-transformers，encode 接口不支持反向传播；已仅训练分类头部")
+                self.config.fine_tune_encoder = False
+
+            # 控制编码器可训练性
+            self._set_encoder_trainable(getattr(self.config, "fine_tune_encoder", False))
             
             # 创建框架分类器
             self.frame_classifier = nn.Sequential(
@@ -128,6 +145,15 @@ class SVFramingHead:
             return getattr(self.config, "max_length", 512)
 
         return min(valid_candidates)
+
+    def _set_encoder_trainable(self, trainable: bool):
+        """控制编码器参数是否参与训练"""
+        if self.encoder is None or not hasattr(self.encoder, "parameters"):
+            return
+        for param in self.encoder.parameters():
+            param.requires_grad = trainable
+        mode = "trainable" if trainable else "frozen"
+        logger.info("Encoder parameters set to %s", mode)
     
     def predict_frames(self, texts: List[str]) -> Dict[str, np.ndarray]:
         """预测SV2000框架分数
@@ -148,6 +174,9 @@ class SVFramingHead:
             # 框架分类预测
             with torch.inference_mode():
                 frame_logits = self.frame_classifier(embeddings)
+                # 温度标定：温度>0时缩放logits，温度为1时等价于原始输出
+                if self.temperature is not None:
+                    frame_logits = frame_logits / self.temperature.clamp(min=1e-3)
                 frame_probs = torch.sigmoid(frame_logits)  # 多标签分类
                 
                 # 转换为numpy数组
@@ -169,10 +198,10 @@ class SVFramingHead:
             logger.error(f"Error in frame prediction: {e}")
             return self._empty_predictions(len(texts))
     
-    def _encode_texts(self, texts: List[str]) -> torch.Tensor:
+    def _encode_texts(self, texts: List[str], requires_grad: bool = False) -> torch.Tensor:
         """编码文本为嵌入向量"""
-        if hasattr(self.encoder, 'encode'):
-            # sentence-transformers接口
+        if self.encoder_backend == "sentence_transformers" and hasattr(self.encoder, "encode"):
+            # sentence-transformers接口（只用于推理或冻结情形）
             embeddings = self.encoder.encode(
                 texts, 
                 convert_to_tensor=True,
@@ -180,12 +209,10 @@ class SVFramingHead:
                 batch_size=self.config.batch_size
             )
         else:
-            # 标准transformers接口
+            # 标准transformers接口，支持反向传播
             embeddings_list = []
-            
             for i in range(0, len(texts), self.config.batch_size):
                 batch_texts = texts[i:i + self.config.batch_size]
-                
                 inputs = self.tokenizer(
                     batch_texts,
                     padding=True,
@@ -193,13 +220,17 @@ class SVFramingHead:
                     max_length=self.config.max_length,
                     return_tensors="pt"
                 ).to(self.device)
-                
-                with torch.inference_mode():
+
+                with torch.set_grad_enabled(requires_grad):
                     outputs = self.encoder(**inputs)
-                    # 使用[CLS] token或平均池化
-                    batch_embeddings = outputs.last_hidden_state[:, 0, :]  # [CLS] token
+                    # 使用平均池化提升稳定性
+                    last_hidden = outputs.last_hidden_state
+                    mask = inputs["attention_mask"].unsqueeze(-1)
+                    masked_sum = (last_hidden * mask).sum(dim=1)
+                    mask_length = mask.sum(dim=1).clamp(min=1)
+                    batch_embeddings = masked_sum / mask_length
                     embeddings_list.append(batch_embeddings)
-            
+
             embeddings = torch.cat(embeddings_list, dim=0)
         
         return embeddings
@@ -214,6 +245,15 @@ class SVFramingHead:
             'sv_resp_pred': np.zeros(batch_size),
             'sv_frame_avg_pred': np.zeros(batch_size)
         }
+
+    def set_temperature(self, temperature: torch.Tensor):
+        """设置温度标定参数"""
+        if temperature is None:
+            return
+        if temperature.shape[-1] != 5:
+            raise ValueError("temperature 向量长度必须为5")
+        self.temperature = temperature.to(self.device)
+        logger.info("Applied temperature scaling: %s", self.temperature.detach().cpu().tolist())
     
     def train_step(self, texts: List[str], targets: np.ndarray, optimizer, criterion) -> float:
         """单步训练
@@ -228,9 +268,11 @@ class SVFramingHead:
             训练损失
         """
         self.frame_classifier.train()
+        if getattr(self.config, "fine_tune_encoder", False) and self.encoder is not None:
+            self.encoder.train()
         
         # 获取嵌入
-        embeddings = self._encode_texts(texts)
+        embeddings = self._encode_texts(texts, requires_grad=getattr(self.config, "fine_tune_encoder", False))
         
         # 前向传播
         logits = self.frame_classifier(embeddings)
@@ -242,6 +284,12 @@ class SVFramingHead:
         # 反向传播
         optimizer.zero_grad()
         loss.backward()
+        max_grad_norm = getattr(self.config, "max_grad_norm", None)
+        if max_grad_norm is not None and max_grad_norm > 0:
+            params_to_clip = list(self.frame_classifier.parameters())
+            if getattr(self.config, "fine_tune_encoder", False) and self.encoder is not None:
+                params_to_clip += list(self.encoder.parameters())
+            torch.nn.utils.clip_grad_norm_(params_to_clip, max_grad_norm)
         optimizer.step()
         
         return loss.item()
@@ -250,7 +298,8 @@ class SVFramingHead:
         """保存模型"""
         torch.save({
             'frame_classifier_state_dict': self.frame_classifier.state_dict(),
-            'config': self.config
+            'config': self.config,
+            'temperature': self.temperature.detach().cpu()
         }, path)
         logger.info(f"SV2000 model saved to {path}")
     
@@ -258,14 +307,21 @@ class SVFramingHead:
         """加载模型"""
         checkpoint = torch.load(path, map_location=self.device)
         self.frame_classifier.load_state_dict(checkpoint['frame_classifier_state_dict'])
+        # 若存在温度标定参数则加载
+        if 'temperature' in checkpoint:
+            self.set_temperature(checkpoint['temperature'])
         logger.info(f"SV2000 model loaded from {path}")
     
     def eval_mode(self):
         """设置为评估模式"""
         if self.frame_classifier:
             self.frame_classifier.eval()
+        if self.encoder is not None:
+            self.encoder.eval()
     
     def train_mode(self):
         """设置为训练模式"""
         if self.frame_classifier:
             self.frame_classifier.train()
+        if getattr(self.config, "fine_tune_encoder", False) and self.encoder is not None:
+            self.encoder.train()

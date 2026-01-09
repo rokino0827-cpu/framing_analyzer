@@ -45,12 +45,20 @@ def create_training_config(args) -> AnalyzerConfig:
     
     # 更新配置参数
     config.sv_framing.learning_rate = args.learning_rate
+    config.sv_framing.encoder_learning_rate = args.encoder_learning_rate or args.learning_rate
+    # 恢复run3的头部学习率策略：未显式指定时使用max(learning_rate, 1e-3)
+    config.sv_framing.head_learning_rate = (
+        args.head_learning_rate if args.head_learning_rate is not None
+        else max(args.learning_rate, 1e-3)
+    )
     config.sv_framing.batch_size = args.batch_size
     config.sv_framing.dropout_rate = args.dropout_rate
     config.sv_framing.training_mode = args.training_mode
     config.sv_framing.device = args.device
     config.sv_framing.model_save_path = args.output_dir
     config.sv_framing.max_length = args.max_length
+    config.sv_framing.fine_tune_encoder = args.fine_tune_encoder
+    config.sv_framing.max_grad_norm = args.max_grad_norm
     
     # 编码器配置
     if args.encoder_name:
@@ -62,6 +70,13 @@ def create_training_config(args) -> AnalyzerConfig:
     config.fusion.use_ridge_optimization = args.optimize_weights
     config.fusion.ridge_alpha = args.ridge_alpha
     config.fusion.cross_validation_folds = args.cv_folds
+
+    # 框架loss权重（JSON字符串）
+    if args.frame_loss_weights:
+        try:
+            config.sv_framing.frame_loss_weights = json.loads(args.frame_loss_weights)
+        except json.JSONDecodeError as exc:
+            raise ValueError("frame_loss_weights 需为JSON格式，例如 '{\"moral\":1.6,\"resp\":1.4}'") from exc
     
     return config
 
@@ -131,9 +146,11 @@ def train_model(args):
     logger.info("最终结果:")
     
     final_metrics = training_report.get('final_metrics', {})
-    logger.info(f"  验证损失: {final_metrics.get('val_loss', 'N/A')}")
-    logger.info(f"  平均相关性: {final_metrics.get('avg_correlation', 'N/A')}")
-    logger.info(f"  最佳轮次: {final_metrics.get('best_epoch', 'N/A')}")
+    val_metrics = final_metrics.get('val', {}) if isinstance(final_metrics, dict) else {}
+    logger.info(f"  验证损失: {val_metrics.get('loss', 'N/A')}")
+    logger.info(f"  平均相关性: {val_metrics.get('avg_correlation', 'N/A')}")
+    best_epoch = training_report.get('best_epoch') or training_report.get('training_history', {}).get('best_epoch')
+    logger.info(f"  最佳轮次: {best_epoch if best_epoch is not None else 'N/A'}")
     
     if 'optimized_weights' in training_report:
         logger.info("优化后的融合权重:")
@@ -192,8 +209,13 @@ def main():
                        help="训练轮数")
     parser.add_argument("--batch_size", type=int, default=16,
                        help="批处理大小")
-    parser.add_argument("--learning_rate", type=float, default=2e-5,
-                       help="学习率")
+    # 恢复run3默认：头部学习率可达1e-3，主学习率默认1e-3以匹配最佳实验
+    parser.add_argument("--learning_rate", type=float, default=1e-3,
+                       help="学习率（冻结编码器时主要作用于分类头）")
+    parser.add_argument("--encoder_learning_rate", type=float, default=2e-5,
+                       help="编码器学习率（启用微调时生效）")
+    parser.add_argument("--head_learning_rate", type=float, default=None,
+                       help="分类头学习率（默认None时回退到max(lr,1e-3)以匹配run3表现）")
     parser.add_argument("--dropout_rate", type=float, default=0.1,
                        help="Dropout率")
     parser.add_argument("--validation_split", type=float, default=0.2,
@@ -216,6 +238,12 @@ def main():
                        help="训练模式")
     parser.add_argument("--device", type=str, default="auto",
                        help="计算设备 (auto/cpu/cuda)")
+    parser.add_argument("--fine_tune_encoder", action="store_true",
+                       help="是否微调编码器（默认冻结）")
+    parser.add_argument("--max_grad_norm", type=float, default=1.0,
+                       help="梯度裁剪阈值，0或负数表示不裁剪")
+    parser.add_argument("--frame_loss_weights", type=str, default=None,
+                       help="JSON 字典自定义框架loss权重，如 '{\"moral\":1.6,\"resp\":1.4}'")
     
     # 融合优化参数
     parser.add_argument("--optimize_weights", action="store_true",
