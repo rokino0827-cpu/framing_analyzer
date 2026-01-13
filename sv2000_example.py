@@ -122,8 +122,8 @@ def example_custom_configuration():
     # 配置SV2000组件
     config.sv_framing = SVFramingConfig(
         enabled=True,
-        encoder_name="sentence-transformers/all-MiniLM-L6-v2",
-        hidden_size=384,
+        encoder_name="bge_m3",
+        hidden_size=1024,
         dropout_rate=0.1,
         batch_size=8,  # 较小的批处理大小
         device="cpu",  # 强制使用CPU

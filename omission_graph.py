@@ -3,16 +3,25 @@
 基于OmiGraph论文的省略感知图推理方法
 """
 
-import numpy as np
-import networkx as nx
-from typing import List, Dict, Tuple, Optional, Set, Any
-from dataclasses import dataclass
-from sklearn.metrics.pairwise import cosine_similarity
 import logging
+import os
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Set, Any
+
+import networkx as nx
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+
+from utils import find_hf_cache_model_path
 
 logger = logging.getLogger(__name__)
+
+
+def _is_sentence_transformer_dir(path: Path) -> bool:
+    """检查目标目录是否包含SentenceTransformer所需结构。"""
+    return (path / "modules.json").exists()
 
 @dataclass
 class GraphNode:
@@ -166,23 +175,52 @@ class OmissionAwareGraphBuilder:
         """初始化句向量模型，优先使用仓库内的本地副本"""
         omission_cfg = getattr(self.config, "omission", None)
         configured_name = getattr(
-            omission_cfg, "embedding_model_name_or_path", "all-MiniLM-L6-v2"
+            omission_cfg, "embedding_model_name_or_path", "bge_m3"
         )
+        allow_remote_env = os.environ.get("ALLOW_REMOTE_MODEL_DOWNLOAD", "0").lower()
+        allow_remote = allow_remote_env in ("1", "true", "yes")
+        if os.environ.get("HF_HUB_OFFLINE", "0") == "1":
+            allow_remote = False
 
-        local_repo_path = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
+        preferred_local_dirs = ["bge_m3", "bge-m3"]
+        fallback_dir = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
 
         candidates: List[Path] = []
         if configured_name:
             configured_path = Path(configured_name)
             if configured_path.exists():
                 candidates.append(configured_path)
-        if local_repo_path.exists() and local_repo_path not in candidates:
-            candidates.append(local_repo_path)
-        if configured_name:
-            candidates.append(Path(configured_name))
+
+        cache_hit = find_hf_cache_model_path(configured_name)
+        if not cache_hit and "bge" in str(configured_name).lower() and "m3" in str(configured_name).lower():
+            cache_hit = find_hf_cache_model_path("BAAI/bge-m3")
+        if cache_hit:
+            cached_path = Path(cache_hit)
+            if cached_path.exists() and cached_path not in candidates:
+                candidates.append(cached_path)
+
+        for dir_name in preferred_local_dirs:
+            local_repo_path = Path(__file__).resolve().parent / dir_name
+            if local_repo_path.exists() and local_repo_path not in candidates:
+                candidates.append(local_repo_path)
+        if fallback_dir.exists() and fallback_dir not in candidates:
+            candidates.append(fallback_dir)
+        if configured_name and Path(configured_name) not in candidates:
+            if allow_remote:
+                candidates.append(Path(configured_name))
+            else:
+                logger.info(
+                    "Skipping remote model download for %s due to offline mode",
+                    configured_name,
+                )
 
         for candidate in candidates:
             target = str(candidate)
+            if Path(target).is_dir() and not _is_sentence_transformer_dir(Path(target)):
+                logger.warning(
+                    "Path %s 缺少SentenceTransformer所需的modules.json，跳过该候选。", target
+                )
+                continue
             try:
                 from sentence_transformers import SentenceTransformer  # 延迟导入
                 model = SentenceTransformer(target)

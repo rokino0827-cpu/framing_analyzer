@@ -7,10 +7,42 @@ import pandas as pd
 import numpy as np
 from typing import List, Tuple, Dict, Optional
 import logging
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# 题项检测模板（按Semetko & Valkenburg顺序）
+ITEM_TEMPLATES = [
+    ("conflict", ["sv_conflict_q1", "conflict_q1", "disagreement"]),
+    ("conflict", ["sv_conflict_q2", "conflict_q2", "two_sides"]),
+    ("conflict", ["sv_conflict_q3", "conflict_q3", "winners_losers"]),
+    ("conflict", ["sv_conflict_q4", "conflict_q4", "reproach"]),
+    ("human", ["sv_human_q1", "human_q1", "human_example", "face"]),
+    ("human", ["sv_human_q2", "human_q2", "adjectives", "vignettes"]),
+    ("human", ["sv_human_q3", "human_q3", "feelings", "empathy"]),
+    ("human", ["sv_human_q4", "human_q4", "affected"]),
+    ("human", ["sv_human_q5", "human_q5", "visual_information"]),
+    ("econ", ["sv_econ_q1", "econ_q1", "financial_losses", "gains"]),
+    ("econ", ["sv_econ_q2", "econ_q2", "costs", "expense"]),
+    ("econ", ["sv_econ_q3", "econ_q3", "economic_consequences"]),
+    ("moral", ["sv_moral_q1", "moral_q1", "moral_message"]),
+    ("moral", ["sv_moral_q2", "moral_q2", "morality", "religious"]),
+    ("moral", ["sv_moral_q3", "moral_q3", "social_prescriptions"]),
+    ("resp", ["sv_resp_q1", "resp_q1", "government_ability"]),
+    ("resp", ["sv_resp_q2", "resp_q2", "individual_group_responsible"]),
+    ("resp", ["sv_resp_q3", "resp_q3", "government_responsible"]),
+    ("resp", ["sv_resp_q4", "resp_q4", "solution_proposed"]),
+    ("resp", ["sv_resp_q5", "resp_q5", "urgent_action"]),
+]
+
+FRAME_TO_ITEMS = {
+    "conflict": [1, 2, 3, 4],
+    "human": [5, 6, 7, 8, 9],
+    "econ": [10, 11, 12],
+    "moral": [13, 14, 15],
+    "resp": [16, 17, 18, 19, 20],
+}
 
 class SV2000DataLoader:
     """SV2000标注数据加载器"""
@@ -23,6 +55,9 @@ class SV2000DataLoader:
         self.val_df = None
         self.test_df = None
         self.column_mapping = None  # 存储列映射信息
+        self.random_seed = getattr(config, "random_seed", 42)
+        self.grouping_info = {}
+        self.item_coverage_stats = {}
         
         self._load_and_validate_data()
         
@@ -100,6 +135,16 @@ class SV2000DataLoader:
             logger.warning(f"Found {long_texts} very long texts (> 10000 chars)")
         
         logger.info(f"Data quality validation completed. Final dataset size: {len(self.df)}")
+
+    def _match_column_by_keywords(self, lower_map: Dict[str, str], keywords: List[str], used: set) -> Optional[str]:
+        """按关键词匹配列名，避免重复复用同一列"""
+        for lower_name, original in lower_map.items():
+            if original in used:
+                continue
+            if any(keyword in lower_name for keyword in keywords):
+                used.add(original)
+                return original
+        return None
     
     def _detect_column_mapping(self) -> Dict[str, str]:
         """智能检测列映射"""
@@ -238,6 +283,99 @@ class SV2000DataLoader:
                 self.df[frame_name] = pd.to_numeric(self.df[frame_name], errors='coerce')
                 self.df[frame_name] = self.df[frame_name].fillna(0.0)
                 self.df[frame_name] = np.clip(self.df[frame_name], 0.0, 1.0)
+
+        # 标准化20题项列，供item-level训练使用
+        self._standardize_item_columns()
+        # 若题项可用但聚合列缺失，回填框架列
+        self._aggregate_frame_from_items()
+
+    def _standardize_item_columns(self):
+        """根据已知题项模板提取/构建 item_1...item_20"""
+        lower_map = {col.lower(): col for col in self.df.columns}
+        used_cols = set()
+        coverage = {"found": 0, "total": len(ITEM_TEMPLATES), "missing": []}
+
+        for idx, (frame, keywords) in enumerate(ITEM_TEMPLATES, start=1):
+            matched = self._match_column_by_keywords(lower_map, keywords, used_cols)
+            target_col = f"item_{idx}"
+            if matched:
+                self.df[target_col] = pd.to_numeric(self.df[matched], errors="coerce")
+                coverage["found"] += 1
+            else:
+                self.df[target_col] = np.nan
+                coverage["missing"].append(target_col)
+
+        # 数值清洗
+        item_cols = [f"item_{i}" for i in range(1, len(ITEM_TEMPLATES) + 1)]
+        self.df[item_cols] = self.df[item_cols].clip(lower=0.0, upper=1.0).fillna(0.0)
+        self.item_coverage_stats = coverage
+        if coverage["found"] == 0:
+            logger.info("未检测到题项列，item-level 训练将回退到框架级标签")
+        elif coverage["found"] < coverage["total"]:
+            logger.info("题项列覆盖率 %.0f%%，缺失: %s",
+                        coverage["found"] / coverage["total"] * 100,
+                        coverage["missing"][:5])
+
+    def _aggregate_frame_from_items(self):
+        """若存在题项则聚合为框架分数"""
+        if not self.item_coverage_stats:
+            return
+        item_cols = [col for col in self.df.columns if col.startswith("item_")]
+        if not item_cols:
+            return
+
+        for frame, item_indices in FRAME_TO_ITEMS.items():
+            cols = [f"item_{i}" for i in item_indices if f"item_{i}" in self.df.columns]
+            if not cols:
+                continue
+            frame_col = f"y_{frame}"
+            if frame_col not in self.df.columns or self.df[frame_col].isnull().all():
+                self.df[frame_col] = self.df[cols].mean(axis=1)
+
+    def _get_group_labels(self) -> Optional[pd.Series]:
+        """构造分组标签，优先事件簇，其次媒体+时间窗口"""
+        cfg = getattr(self.config, "sv_framing", self.config)
+        if not getattr(cfg, "use_group_split", False):
+            return None
+
+        candidates = []
+        if getattr(cfg, "group_column", None):
+            candidates.append(cfg.group_column)
+        if getattr(cfg, "fallback_group_columns", None):
+            candidates.extend(cfg.fallback_group_columns)
+        candidates.extend(["event_cluster", "cluster_id", "topic_cluster"])
+
+        for col in candidates:
+            if col and col in self.df.columns:
+                series = self.df[col].fillna("unknown_group").astype(str)
+                if series.nunique() > 1:
+                    logger.info("使用分组列 %s 进行Group split (groups=%d)", col, series.nunique())
+                    return series
+
+        pub_col = getattr(cfg, "publication_column", None)
+        time_col = getattr(cfg, "time_column", None)
+        if pub_col and time_col and pub_col in self.df.columns and time_col in self.df.columns:
+            time_freq = getattr(cfg, "time_freq", "W")
+            timestamps = pd.to_datetime(self.df[time_col], errors="coerce")
+            time_bucket = timestamps.dt.to_period(time_freq).astype(str).fillna("na_time")
+            groups = self.df[pub_col].fillna("na_pub").astype(str) + "|" + time_bucket
+            if groups.nunique() > 1:
+                logger.info("使用 publication+时间窗口 分组 (freq=%s, groups=%d)", time_freq, groups.nunique())
+                return groups
+
+        logger.info("未找到可用分组列，回退随机切分")
+        return None
+
+    def _log_group_split(self, groups: Optional[pd.Series], enabled: bool):
+        """记录分组切分统计"""
+        if not enabled or groups is None:
+            self.grouping_info["strategy"] = "random"
+            return
+        self.grouping_info["strategy"] = "group"
+        self.grouping_info["group_count"] = int(groups.nunique())
+        top_groups = groups.value_counts().head(5).to_dict()
+        self.grouping_info["top_groups"] = top_groups
+        logger.info("Group split覆盖: top groups %s", top_groups)
     
     def get_training_data(self, mode: str = "frame_level", split: str = "train") -> Tuple[List[str], np.ndarray]:
         """获取训练数据
@@ -284,6 +422,10 @@ class SV2000DataLoader:
                 logger.warning("No item-level data available, falling back to frame-level")
                 frame_columns = ['y_conflict', 'y_human', 'y_econ', 'y_moral', 'y_resp']
                 targets = df[frame_columns].values
+            elif self.item_coverage_stats.get("found", 0) == 0:
+                logger.warning("题项覆盖率为0，item-level训练回退到框架标签")
+                frame_columns = ['y_conflict', 'y_human', 'y_econ', 'y_moral', 'y_resp']
+                targets = df[frame_columns].values
             else:
                 targets = df[available_items].values
         else:
@@ -293,39 +435,64 @@ class SV2000DataLoader:
         return texts, targets
     
     def create_train_val_split(self, val_ratio: float = 0.2, test_ratio: float = 0.1, 
-                              random_seed: int = 42):
+                              random_seed: Optional[int] = None):
         """创建训练/验证/测试数据分割"""
         if len(self.df) == 0:
             logger.error("No data available for splitting")
             return
-        
+        seed = self.random_seed if random_seed is None else random_seed
+        groups = self._get_group_labels()
+        group_ready = groups is not None and groups.nunique() > 1
+        self.grouping_info = {
+            "enabled": group_ready,
+            "group_candidates": groups.nunique() if groups is not None else 0
+        }
+
         # 首先分离测试集
         if test_ratio > 0:
-            train_val_df, self.test_df = train_test_split(
-                self.df, 
-                test_size=test_ratio, 
-                random_state=random_seed,
-                stratify=None  # 回归任务不需要分层
-            )
+            if group_ready:
+                splitter = GroupShuffleSplit(n_splits=1, test_size=test_ratio, random_state=seed)
+                train_idx, test_idx = next(splitter.split(self.df, groups=groups))
+                train_val_df = self.df.iloc[train_idx]
+                self.test_df = self.df.iloc[test_idx]
+            else:
+                train_val_df, self.test_df = train_test_split(
+                    self.df,
+                    test_size=test_ratio,
+                    random_state=seed,
+                    stratify=None
+                )
         else:
             train_val_df = self.df
             self.test_df = None
         
         # 然后分离训练集和验证集
         if val_ratio > 0:
-            self.train_df, self.val_df = train_test_split(
-                train_val_df,
-                test_size=val_ratio / (1 - test_ratio),  # 调整比例
-                random_state=random_seed
-            )
+            if group_ready:
+                groups_tv = groups.iloc[train_val_df.index]
+                splitter = GroupShuffleSplit(
+                    n_splits=1,
+                    test_size=val_ratio / (1 - test_ratio),
+                    random_state=seed
+                )
+                train_idx, val_idx = next(splitter.split(train_val_df, groups=groups_tv))
+                self.train_df = train_val_df.iloc[train_idx]
+                self.val_df = train_val_df.iloc[val_idx]
+            else:
+                self.train_df, self.val_df = train_test_split(
+                    train_val_df,
+                    test_size=val_ratio / (1 - test_ratio),
+                    random_state=seed
+                )
         else:
             self.train_df = train_val_df
             self.val_df = None
         
-        logger.info(f"Data split completed:")
+        logger.info("Data split completed (group_split=%s):", group_ready)
         logger.info(f"  Train: {len(self.train_df) if self.train_df is not None else 0}")
         logger.info(f"  Val: {len(self.val_df) if self.val_df is not None else 0}")
         logger.info(f"  Test: {len(self.test_df) if self.test_df is not None else 0}")
+        self._log_group_split(groups, group_ready)
     
     def get_data_statistics(self) -> Dict:
         """获取数据集统计信息"""
@@ -369,6 +536,10 @@ class SV2000DataLoader:
                 'val_size': len(self.val_df) if self.val_df is not None else 0,
                 'test_size': len(self.test_df) if self.test_df is not None else 0
             }
+        if self.grouping_info:
+            stats['grouping'] = self.grouping_info
+        if self.item_coverage_stats:
+            stats['item_coverage'] = self.item_coverage_stats
         
         return stats
     

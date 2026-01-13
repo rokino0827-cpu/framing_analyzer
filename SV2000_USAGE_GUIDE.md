@@ -89,9 +89,9 @@ config = AnalyzerConfig()
 # SV2000框架配置
 config.sv_framing = SVFramingConfig(
     enabled=True,                    # 启用SV2000模式
-    encoder_name="sentence-transformers/all-MiniLM-L6-v2",  # 编码器模型
+    encoder_name="bge_m3",           # 编码器模型（默认BGE M3）
     encoder_local_path=None,         # 本地模型路径（可选）
-    hidden_size=384,                 # 隐藏层大小
+    hidden_size=1024,                # 隐藏层大小
     dropout_rate=0.1,                # Dropout率
     learning_rate=2e-5,              # 学习率
     training_mode="frame_level",     # 训练模式：frame_level 或 item_level

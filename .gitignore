@@ -21,3 +21,9 @@ cache/
 .spec-workflow/
 all-MiniLM-L6-v2/
 bias_detector_data/
+
+# Documentation
+*.md
+
+# Local ad-hoc tests (non-model)
+local_tests/

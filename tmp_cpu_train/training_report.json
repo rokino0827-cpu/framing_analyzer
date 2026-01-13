@@ -1,0 +1,518 @@
+{
+  "data_statistics": {
+    "total_samples": 60,
+    "columns": [
+      "article_id",
+      "author",
+      "title",
+      "content",
+      "url",
+      "section",
+      "publication",
+      "annotator_id",
+      "sv_conflict_q1_reflects_disagreement",
+      "sv_conflict_q2_refers_to_two_sides",
+      "sv_conflict_q3_refers_to_winners_losers_optional",
+      "sv_conflict_q4_reproach_between_sides",
+      "sv_human_q1_human_example_or_face",
+      "sv_human_q2_adjectives_personal_vignettes",
+      "sv_human_q3_feelings_empathy",
+      "sv_human_q4_how_people_affected",
+      "sv_human_q5_visual_information_optional",
+      "sv_econ_q1_financial_losses_gains",
+      "sv_econ_q2_costs_degree_of_expense",
+      "sv_econ_q3_economic_consequences_pursue_or_not",
+      "sv_moral_q1_moral_message",
+      "sv_moral_q2_morality_god_religious_tenets",
+      "sv_moral_q3_social_prescriptions",
+      "sv_resp_q1_government_ability_solve",
+      "sv_resp_q2_individual_group_responsible",
+      "sv_resp_q3_government_responsible",
+      "sv_resp_q4_solution_proposed",
+      "sv_resp_q5_urgent_action_required_optional",
+      "sv_notes",
+      "sv_frame_avg",
+      "avg_stratum",
+      "id",
+      "y_conflict",
+      "y_conflict_disagreement",
+      "y_conflict_sides",
+      "y_conflict_optional",
+      "y_human",
+      "y_human_face",
+      "y_human_vignettes",
+      "y_human_empathy",
+      "y_human_affected",
+      "y_human_optional",
+      "y_econ",
+      "y_econ_gains",
+      "y_econ_expense",
+      "y_econ_not",
+      "y_moral",
+      "y_moral_message",
+      "y_moral_tenets",
+      "y_moral_prescriptions",
+      "y_resp",
+      "y_resp_solve",
+      "y_resp_responsible",
+      "y_resp_proposed",
+      "y_resp_optional",
+      "item_1",
+      "item_2",
+      "item_3",
+      "item_4",
+      "item_5",
+      "item_6",
+      "item_7",
+      "item_8",
+      "item_9",
+      "item_10",
+      "item_11",
+      "item_12",
+      "item_13",
+      "item_14",
+      "item_15",
+      "item_16",
+      "item_17",
+      "item_18",
+      "item_19",
+      "item_20"
+    ],
+    "text_statistics": {
+      "mean_length": 5668.3,
+      "median_length": 5101.5,
+      "min_length": 1004,
+      "max_length": 20016,
+      "std_length": 3862.539479475708
+    },
+    "frame_statistics": {
+      "y_conflict": {
+        "mean": 0.2833333333333333,
+        "std": 0.3489289504030563,
+        "min": 0.0,
+        "max": 1.0,
+        "median": 0.0
+      },
+      "y_human": {
+        "mean": 0.4966666666666667,
+        "std": 0.3709660620717744,
+        "min": 0.0,
+        "max": 1.0,
+        "median": 0.6
+      },
+      "y_econ": {
+        "mean": 0.3333333333333333,
+        "std": 0.3832657764100933,
+        "min": 0.0,
+        "max": 1.0,
+        "median": 0.3333333333333333
+      },
+      "y_moral": {
+        "mean": 0.22777777777777777,
+        "std": 0.26390995059175654,
+        "min": 0.0,
+        "max": 0.6666666666666666,
+        "median": 0.0
+      },
+      "y_resp": {
+        "mean": 0.36666666666666675,
+        "std": 0.3629757738877053,
+        "min": 0.0,
+        "max": 1.0,
+        "median": 0.2
+      }
+    },
+    "split_statistics": {
+      "train_size": 42,
+      "val_size": 12,
+      "test_size": 6
+    },
+    "grouping": {
+      "enabled": false,
+      "group_candidates": 0,
+      "strategy": "random"
+    },
+    "item_coverage": {
+      "found": 20,
+      "total": 20,
+      "missing": []
+    }
+  },
+  "training_history": {
+    "train_loss": [
+      0.464573778889396
+    ],
+    "val_loss": [
+      0.4619293808937073
+    ],
+    "val_correlation": [
+      0.3683035532478934
+    ],
+    "learning_rate": [
+      0.001
+    ],
+    "best_epoch": 1,
+    "best_val_loss": 0.4619293808937073,
+    "best_val_correlation": 0.3683035532478934
+  },
+  "final_metrics": {
+    "val": {
+      "conflict_pearson": 0.19793410015661647,
+      "conflict_spearman": 0.2752151200946783,
+      "conflict_mae": 0.33058441430330276,
+      "conflict_rmse": 0.3605393159239205,
+      "human_pearson": 0.5070910127311559,
+      "human_spearman": 0.5229778641399082,
+      "human_mae": 0.3334375778834025,
+      "human_rmse": 0.3509496280910263,
+      "econ_pearson": 0.43875571614153447,
+      "econ_spearman": 0.4523466368819146,
+      "econ_mae": 0.34470394916004604,
+      "econ_rmse": 0.3821756204099063,
+      "moral_pearson": 0.47664608306195205,
+      "moral_spearman": 0.6279858256227592,
+      "moral_mae": 0.30051392462651094,
+      "moral_rmse": 0.38857504763613965,
+      "resp_pearson": 0.042560537890312077,
+      "resp_spearman": 0.04652421051992355,
+      "resp_mae": 0.3057462712128957,
+      "resp_rmse": 0.34501245081712245,
+      "avg_correlation": 0.33259748999631417,
+      "avg_mae": 0.3229972274372316,
+      "frame_avg_pearson": 0.37158285423769705,
+      "frame_avg_mae": 0.1529778962665134,
+      "loss": 0.370230108499527,
+      "pred_stats": {
+        "sv_conflict_pred": {
+          "mean": 0.38591861724853516,
+          "std": 0.009427780285477638
+        },
+        "sv_human_pred": {
+          "mean": 0.5050346851348877,
+          "std": 0.039505667984485626
+        },
+        "sv_econ_pred": {
+          "mean": 0.47032836079597473,
+          "std": 0.03374659642577171
+        },
+        "sv_moral_pred": {
+          "mean": 0.3005337417125702,
+          "std": 0.4362085461616516
+        },
+        "sv_resp_pred": {
+          "mean": 0.45218953490257263,
+          "std": 0.01255288626998663
+        },
+        "sv_frame_avg_pred": {
+          "mean": 0.4228009879589081,
+          "std": 0.08970092982053757
+        }
+      },
+      "target_stats": {
+        "conflict": {
+          "mean": 0.3333333333333333,
+          "std": 0.35843021946010944
+        },
+        "human": {
+          "mean": 0.5333333333333333,
+          "std": 0.3681787005729087
+        },
+        "econ": {
+          "mean": 0.47222222222222215,
+          "std": 0.39577241246597245
+        },
+        "moral": {
+          "mean": 0.27777777777777773,
+          "std": 0.2664350846284844
+        },
+        "resp": {
+          "mean": 0.43333333333333335,
+          "std": 0.34480268109295337
+        },
+        "frame_avg": {
+          "mean": 0.41,
+          "std": 0.3615322330796461
+        }
+      }
+    },
+    "test": {
+      "conflict_pearson": 0.21092311537927358,
+      "conflict_spearman": 0.16903085094570333,
+      "conflict_mae": 0.2899164507786433,
+      "conflict_rmse": 0.3190355571643554,
+      "human_pearson": -0.06839402848764678,
+      "human_spearman": -0.06172133998483677,
+      "human_mae": 0.38930177092552193,
+      "human_rmse": 0.41331735872240627,
+      "econ_pearson": 0.42488454379911555,
+      "econ_spearman": 0.26482044885142486,
+      "econ_mae": 0.31301503876845044,
+      "econ_rmse": 0.3567438223406986,
+      "moral_pearson": -0.44722361707739183,
+      "moral_spearman": -0.4173650061841515,
+      "moral_mae": 0.6111167133432092,
+      "moral_rmse": 0.7576767610679267,
+      "resp_pearson": 0.4387254307860248,
+      "resp_spearman": 0.6546536707079772,
+      "resp_mae": 0.39763482014338175,
+      "resp_rmse": 0.4139193583292409,
+      "avg_correlation": 0.11178308887987506,
+      "avg_mae": 0.40019695879184136,
+      "frame_avg_pearson": -0.8377593046200887,
+      "frame_avg_mae": 0.3050465420881907,
+      "loss": 0.37881892919540405,
+      "pred_stats": {
+        "sv_conflict_pred": {
+          "mean": 0.3827401101589203,
+          "std": 0.01752813346683979
+        },
+        "sv_human_pred": {
+          "mean": 0.533911943435669,
+          "std": 0.04272101819515228
+        },
+        "sv_econ_pred": {
+          "mean": 0.48449864983558655,
+          "std": 0.03667863830924034
+        },
+        "sv_moral_pred": {
+          "mean": 0.5000056028366089,
+          "std": 0.4999943971633911
+        },
+        "sv_resp_pred": {
+          "mean": 0.45058950781822205,
+          "std": 0.00843464583158493
+        },
+        "sv_frame_avg_pred": {
+          "mean": 0.47034916281700134,
+          "std": 0.09645208716392517
+        }
+      },
+      "target_stats": {
+        "conflict": {
+          "mean": 0.125,
+          "std": 0.19094065395649334
+        },
+        "human": {
+          "mean": 0.5666666666666668,
+          "std": 0.40688518719112343
+        },
+        "econ": {
+          "mean": 0.4444444444444444,
+          "std": 0.36851386559504445
+        },
+        "moral": {
+          "mean": 0.1111111111111111,
+          "std": 0.24845199749997665
+        },
+        "resp": {
+          "mean": 0.09999999999999999,
+          "std": 0.22360679774997896
+        },
+        "frame_avg": {
+          "mean": 0.2694444444444445,
+          "std": 0.35865188252608715
+        }
+      }
+    }
+  },
+  "optimized_weights": {},
+  "validation_results": {
+    "is_valid": true,
+    "issues": [],
+    "recommendations": [
+      "Dataset is quite small, consider collecting more data",
+      "Data from single annotator - consider inter-annotator reliability checks"
+    ],
+    "detected_format": "user_machine_annotated",
+    "column_mapping": {
+      "content": "content",
+      "title": "title",
+      "id": "article_id",
+      "sv_frame_avg": "sv_frame_avg",
+      "y_conflict_questions": [
+        "sv_conflict_q1_reflects_disagreement",
+        "sv_conflict_q2_refers_to_two_sides",
+        "sv_conflict_q3_refers_to_winners_losers_optional",
+        "sv_conflict_q4_reproach_between_sides"
+      ],
+      "y_human_questions": [
+        "sv_human_q1_human_example_or_face",
+        "sv_human_q2_adjectives_personal_vignettes",
+        "sv_human_q3_feelings_empathy",
+        "sv_human_q4_how_people_affected",
+        "sv_human_q5_visual_information_optional"
+      ],
+      "y_econ_questions": [
+        "sv_econ_q1_financial_losses_gains",
+        "sv_econ_q2_costs_degree_of_expense",
+        "sv_econ_q3_economic_consequences_pursue_or_not"
+      ],
+      "y_moral_questions": [
+        "sv_moral_q1_moral_message",
+        "sv_moral_q2_morality_god_religious_tenets",
+        "sv_moral_q3_social_prescriptions"
+      ],
+      "y_resp_questions": [
+        "sv_resp_q1_government_ability_solve",
+        "sv_resp_q2_individual_group_responsible",
+        "sv_resp_q3_government_responsible",
+        "sv_resp_q4_solution_proposed",
+        "sv_resp_q5_urgent_action_required_optional"
+      ]
+    },
+    "total_samples": 60,
+    "valid_samples": 60,
+    "question_coverage": {
+      "conflict": {
+        "available": 4,
+        "total": 4,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "human": {
+        "available": 5,
+        "total": 5,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "econ": {
+        "available": 3,
+        "total": 3,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "moral": {
+        "available": 3,
+        "total": 3,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "resp": {
+        "available": 5,
+        "total": 5,
+        "coverage": 1.0,
+        "missing": []
+      }
+    },
+    "frame_avg_stats": {
+      "mean": 0.38861111111111096,
+      "std": 0.19930036919831914,
+      "min": 0.08,
+      "max": 0.8833333333333332,
+      "valid_count": 60
+    },
+    "annotator_stats": {
+      "unique_annotators": 1,
+      "samples_per_annotator": {
+        "LLM_annotator_v1": 60
+      }
+    }
+  },
+  "best_epoch": 1,
+  "best_val_correlation": 0.3683035532478934,
+  "best_val_loss": 0.4619293808937073,
+  "best_val_metrics": {
+    "conflict_pearson": 0.1994796742817947,
+    "conflict_spearman": 0.2752151200946783,
+    "conflict_mae": 0.33353565881649655,
+    "conflict_rmse": 0.39421406066779036,
+    "human_pearson": 0.5065695249792239,
+    "human_spearman": 0.5229778641399082,
+    "human_mae": 0.34697294086217884,
+    "human_rmse": 0.36482427371728354,
+    "econ_pearson": 0.43660925503448267,
+    "econ_spearman": 0.4523466368819146,
+    "econ_mae": 0.3555610320634312,
+    "econ_rmse": 0.3914354987769721,
+    "moral_pearson": 0.6566256437728134,
+    "moral_spearman": 0.6257862187747439,
+    "moral_mae": 0.29582066668404466,
+    "moral_rmse": 0.33657503605137884,
+    "resp_pearson": 0.042233668171152296,
+    "resp_spearman": 0.04652421051992355,
+    "resp_mae": 0.3128579596678416,
+    "resp_rmse": 0.3499579211697643,
+    "avg_correlation": 0.3683035532478934,
+    "avg_mae": 0.3289496516187985,
+    "frame_avg_pearson": 0.17800401505482186,
+    "frame_avg_mae": 0.17351973407798346,
+    "loss": 0.4619293808937073,
+    "pred_stats": {
+      "sv_conflict_pred": {
+        "mean": 0.5010101199150085,
+        "std": 0.008816457353532314
+      },
+      "sv_human_pred": {
+        "mean": 0.48878225684165955,
+        "std": 0.012319493107497692
+      },
+      "sv_econ_pred": {
+        "mean": 0.4926130473613739,
+        "std": 0.011461984366178513
+      },
+      "sv_moral_pred": {
+        "mean": 0.49261727929115295,
+        "std": 0.011406312696635723
+      },
+      "sv_resp_pred": {
+        "mean": 0.49489474296569824,
+        "std": 0.012584448792040348
+      },
+      "sv_frame_avg_pred": {
+        "mean": 0.49398350715637207,
+        "std": 0.004458709619939327
+      }
+    },
+    "target_stats": {
+      "conflict": {
+        "mean": 0.3333333333333333,
+        "std": 0.35843021946010944
+      },
+      "human": {
+        "mean": 0.5333333333333333,
+        "std": 0.3681787005729087
+      },
+      "econ": {
+        "mean": 0.47222222222222215,
+        "std": 0.39577241246597245
+      },
+      "moral": {
+        "mean": 0.27777777777777773,
+        "std": 0.2664350846284844
+      },
+      "resp": {
+        "mean": 0.43333333333333335,
+        "std": 0.34480268109295337
+      },
+      "frame_avg": {
+        "mean": 0.41,
+        "std": 0.3615322330796461
+      }
+    }
+  },
+  "calibration": {
+    "temperature": [
+      0.8876357078552246,
+      0.31084126234054565,
+      0.3373664617538452,
+      0.0010000000474974513,
+      0.990992546081543
+    ],
+    "bias": [
+      -0.4692346155643463,
+      0.16466671228408813,
+      -0.03179194778203964,
+      -0.5230346918106079,
+      -0.17133107781410217
+    ],
+    "calibrated_loss": 2.0555167198181152,
+    "optimizer": "LBFGS",
+    "max_iter": 50
+  },
+  "calibrated_model_path": "tmp_cpu_train/best_sv2000_model_calibrated.pt",
+  "split_strategy": {
+    "enabled": false,
+    "group_candidates": 0,
+    "strategy": "random"
+  }
+}

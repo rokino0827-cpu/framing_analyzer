@@ -26,7 +26,7 @@ def main():
     
     # 数据路径
     parser.add_argument("--data_path", type=str, 
-                       default=r"E:\Datasets\all-the-news-2-1\stratified_validation_sample_by_frame_avg.csv",
+                       default="data/filtered_labels_with_average.csv",
                        help="数据文件路径")
     parser.add_argument("--work_dir", type=str, default="./sv2000_training_results",
                        help="工作目录")

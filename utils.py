@@ -12,6 +12,82 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
+
+def find_hf_cache_model_path(model_id: str) -> Optional[str]:
+    """
+    在 Hugging Face 缓存中查找已下载的模型快照路径。
+    返回值指向具体快照目录，找不到则返回 None。
+    """
+    normalized_ids = [model_id]
+    hyphenated = model_id.replace("_", "-")
+    if hyphenated not in normalized_ids:
+        normalized_ids.append(hyphenated)
+
+    candidate_roots: List[Path] = []
+
+    # 优先使用huggingface_hub提供的缓存路径
+    try:
+        from huggingface_hub.constants import HF_HUB_CACHE
+        candidate_roots.append(Path(HF_HUB_CACHE))
+    except Exception:
+        pass
+
+    # 环境变量覆盖
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        candidate_roots.append(Path(hf_home) / "hub")
+
+    # 仓库/安装环境的本地虚拟环境缓存（如 /root/autodl-tmp/.venv/hf_cache/hub）
+    repo_root = Path(__file__).resolve().parent
+    checked_paths = set()
+    for base in [repo_root, *repo_root.parents]:
+        venv_cache = base / ".venv" / "hf_cache" / "hub"
+        if venv_cache.exists() and str(venv_cache) not in checked_paths:
+            candidate_roots.append(venv_cache)
+            checked_paths.add(str(venv_cache))
+        if base.name == ".venv":
+            direct_cache = base / "hf_cache" / "hub"
+            if direct_cache.exists() and str(direct_cache) not in checked_paths:
+                candidate_roots.append(direct_cache)
+                checked_paths.add(str(direct_cache))
+
+    # 默认用户缓存
+    candidate_roots.append(Path.home() / ".cache" / "huggingface" / "hub")
+
+    for cache_root in candidate_roots:
+        if not cache_root.exists():
+            continue
+
+        for candidate in normalized_ids:
+            repo_dir = cache_root / f"models--{candidate.replace('/', '--')}"
+            if not repo_dir.exists():
+                continue
+
+            snapshot_path: Optional[Path] = None
+            refs_main = repo_dir / "refs" / "main"
+            if refs_main.exists():
+                commit_hash = refs_main.read_text().strip()
+                if commit_hash:
+                    commit_dir = repo_dir / "snapshots" / commit_hash
+                    if commit_dir.exists():
+                        snapshot_path = commit_dir
+
+            if snapshot_path is None:
+                snapshots_dir = repo_dir / "snapshots"
+                if snapshots_dir.exists():
+                    snapshots = sorted(p for p in snapshots_dir.iterdir() if p.is_dir())
+                    if snapshots:
+                        snapshot_path = snapshots[-1]
+
+            if snapshot_path and snapshot_path.exists():
+                logging.info("Resolved cached HF model %s to %s", model_id, snapshot_path)
+                return str(snapshot_path)
+
+            logging.info("Using HF cached repo directory for %s at %s", model_id, repo_dir)
+            return str(repo_dir)
+
+    return None
+
 def setup_environment():
     """设置运行环境"""
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'

@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Dict, Any
 import numpy as np
 
-# 添加项目路径
-sys.path.append(str(Path(__file__).parent.parent))
+# 添加项目路径：指向仓库上级目录以启用包名 `framing_analyzer`
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
 
 from framing_analyzer.sv2000_trainer import SV2000TrainingPipeline
 from framing_analyzer.sv2000_data_loader import SV2000DataLoader
@@ -58,6 +60,7 @@ def create_training_config(args) -> AnalyzerConfig:
     config.sv_framing.model_save_path = args.output_dir
     config.sv_framing.max_length = args.max_length
     config.sv_framing.fine_tune_encoder = args.fine_tune_encoder
+    config.sv_framing.trainable_encoder_layers = args.trainable_encoder_layers
     config.sv_framing.max_grad_norm = args.max_grad_norm
     
     # 编码器配置
@@ -71,6 +74,24 @@ def create_training_config(args) -> AnalyzerConfig:
     config.fusion.ridge_alpha = args.ridge_alpha
     config.fusion.cross_validation_folds = args.cv_folds
 
+    # 分组切分配置
+    config.sv_framing.use_group_split = not args.disable_group_split
+    if args.group_column:
+        config.sv_framing.group_column = args.group_column
+    if args.publication_column:
+        config.sv_framing.publication_column = args.publication_column
+    if args.time_column:
+        config.sv_framing.time_column = args.time_column
+    if args.time_freq:
+        config.sv_framing.time_freq = args.time_freq
+    # 采样与损失
+    config.sv_framing.balance_batches = not args.no_balance_batches
+    config.sv_framing.loss_type = args.loss_type
+    config.sv_framing.focal_gamma = args.focal_gamma
+    config.sv_framing.dynamic_frame_reweight = not args.disable_dynamic_reweight
+    config.sv_framing.item_consistency_weight = args.item_consistency_weight
+    config.sv_framing.return_item_predictions = args.return_item_predictions
+    
     # 框架loss权重（JSON字符串）
     if args.frame_loss_weights:
         try:
@@ -161,6 +182,9 @@ def train_model(args):
     model_path = os.path.join(args.output_dir, "best_sv2000_model.pt")
     if os.path.exists(model_path):
         logger.info(f"最佳模型已保存: {model_path}")
+    calibrated_path = training_report.get('calibrated_model_path')
+    if calibrated_path:
+        logger.info(f"标定后模型已保存: {calibrated_path}")
     
     return training_report
 
@@ -170,11 +194,32 @@ def evaluate_model(args, training_report: Dict[str, Any]):
     
     # 加载评估器
     evaluator = SV2000Evaluator()
+
+    def _normalize_ground_truth(ground_truth: Any) -> Dict[str, Any]:
+        """统一将ground truth转换为评估器期望的字典格式"""
+        if isinstance(ground_truth, dict):
+            return ground_truth
+        arr = np.asarray(ground_truth)
+        if arr.ndim != 2 or arr.shape[1] == 0:
+            return {}
+        frame_names = ["conflict", "human", "econ", "moral", "resp"]
+        gt = {}
+        for idx, name in enumerate(frame_names):
+            if idx < arr.shape[1]:
+                gt[f"y_{name}"] = arr[:, idx]
+        gt["frame_avg"] = arr.mean(axis=1)
+        return gt
     
     # 从训练报告中获取预测结果
     if 'validation_predictions' in training_report:
-        predictions = training_report['validation_predictions']
-        ground_truth = training_report['validation_ground_truth']
+        predictions = training_report.get('validation_predictions')
+        if predictions is None:
+            logger.warning("训练报告未包含验证集预测，跳过评估报告生成")
+            return
+        ground_truth = _normalize_ground_truth(training_report.get('validation_ground_truth'))
+        if not ground_truth:
+            logger.warning("验证集ground truth 缺失或为空，跳过评估报告生成")
+            return
         
         # 评估框架对齐
         alignment_results = evaluator.evaluate_frame_alignment(predictions, ground_truth)
@@ -199,8 +244,8 @@ def main():
     parser = argparse.ArgumentParser(description="SV2000模型训练脚本")
     
     # 数据参数
-    parser.add_argument("--data_path", type=str, required=True,
-                       help="训练数据CSV文件路径")
+    parser.add_argument("--data_path", type=str, default="data/filtered_labels_with_average.csv",
+                       help="训练数据CSV文件路径，默认使用本仓库10k样本集")
     parser.add_argument("--output_dir", type=str, default="./sv2000_models",
                        help="模型输出目录")
     
@@ -212,8 +257,8 @@ def main():
     # 恢复run3默认：头部学习率可达1e-3，主学习率默认1e-3以匹配最佳实验
     parser.add_argument("--learning_rate", type=float, default=1e-3,
                        help="学习率（冻结编码器时主要作用于分类头）")
-    parser.add_argument("--encoder_learning_rate", type=float, default=2e-5,
-                       help="编码器学习率（启用微调时生效）")
+    parser.add_argument("--encoder_learning_rate", type=float, default=1e-5,
+                       help="编码器学习率（启用微调时生效，默认更低以保证稳定微调）")
     parser.add_argument("--head_learning_rate", type=float, default=None,
                        help="分类头学习率（默认None时回退到max(lr,1e-3)以匹配run3表现）")
     parser.add_argument("--dropout_rate", type=float, default=0.1,
@@ -229,10 +274,12 @@ def main():
     
     # 模型参数
     parser.add_argument("--encoder_name", type=str, 
-                       default="sentence-transformers/all-MiniLM-L6-v2",
+                       default="bge_m3",
                        help="编码器模型名称")
     parser.add_argument("--encoder_local_path", type=str,
                        help="本地编码器路径")
+    parser.add_argument("--trainable_encoder_layers", type=int, default=2,
+                       help="轻量微调：解冻编码器末尾的层数，0表示全冻结（默认2层便于温和提升）")
     parser.add_argument("--training_mode", type=str, default="frame_level",
                        choices=["frame_level", "item_level"],
                        help="训练模式")
@@ -244,6 +291,30 @@ def main():
                        help="梯度裁剪阈值，0或负数表示不裁剪")
     parser.add_argument("--frame_loss_weights", type=str, default=None,
                        help="JSON 字典自定义框架loss权重，如 '{\"moral\":1.6,\"resp\":1.4}'")
+    parser.add_argument("--loss_type", type=str, default="focal", choices=["bce", "focal"],
+                       help="损失函数类型，默认Focal缓解易样本主导")
+    parser.add_argument("--focal_gamma", type=float, default=2.0,
+                       help="Focal loss gamma")
+    parser.add_argument("--item_consistency_weight", type=float, default=0.3,
+                       help="题项→框架一致性loss权重，0可关闭")
+    parser.add_argument("--no_balance_batches", action="store_true",
+                       help="禁用基于标签稀缺度的平衡采样")
+    parser.add_argument("--disable_dynamic_reweight", action="store_true",
+                       help="禁用基于验证误差的动态框架加权")
+    parser.add_argument("--return_item_predictions", action="store_true",
+                       help="推理时返回题项概率/得分，便于误差分析")
+
+    # 分组切分
+    parser.add_argument("--disable_group_split", action="store_true",
+                       help="禁用按事件/媒体时间窗口的Group split")
+    parser.add_argument("--group_column", type=str,
+                       help="事件簇分组列名，默认 event_cluster/cluster_id 自动检测")
+    parser.add_argument("--publication_column", type=str,
+                       help="媒体列名，用于 publication+时间 窗口分组")
+    parser.add_argument("--time_column", type=str,
+                       help="时间列名（ISO时间或日期字符串）")
+    parser.add_argument("--time_freq", type=str, default="W",
+                       help="时间窗口频率，默认为周W，可设为M/D")
     
     # 融合优化参数
     parser.add_argument("--optimize_weights", action="store_true",

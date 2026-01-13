@@ -2,10 +2,15 @@
 配置文件 - 框架偏见分析器配置
 """
 
+import logging
 from dataclasses import dataclass
 from typing import List, Dict, Optional
 import json
 from pathlib import Path
+
+from utils import find_hf_cache_model_path
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ProcessingConfig:
@@ -147,7 +152,7 @@ class OmissionConfig:
     """省略感知配置（新增OmiGraph功能）"""
     enabled: bool = False
     # 嵌入模型路径（支持本地目录或模型名称）
-    embedding_model_name_or_path: str = "all-MiniLM-L6-v2"
+    embedding_model_name_or_path: str = "bge_m3"
     
     # 图构建配置
     similarity_threshold: float = 0.5  # 跨文边相似度阈值
@@ -180,26 +185,54 @@ class OmissionConfig:
 class SVFramingConfig:
     """SV2000框架预测配置"""
     enabled: bool = False  # 是否启用SV2000模式
-    encoder_name: str = "sentence-transformers/all-MiniLM-L6-v2"
+    encoder_name: str = "bge_m3"
     encoder_local_path: Optional[str] = None
-    hidden_size: int = 384
+    hidden_size: int = 1024
     dropout_rate: float = 0.1
     # 优化与训练
     learning_rate: float = 2e-5  # 向后兼容：作为默认编码器学习率
     encoder_learning_rate: float = 2e-5
     # 运行实证最优：若未显式指定，则回落到max(learning_rate, 1e-3)
     head_learning_rate: Optional[float] = None
+    min_head_learning_rate: float = 1e-3
     training_mode: str = "frame_level"  # "frame_level" 或 "item_level"
     device: str = "auto"
     batch_size: int = 16
     max_length: int = 512
+    # 长文本分片
+    chunk_stride: int = 128
+    max_chunks_per_text: int = 4
     fine_tune_encoder: bool = False
+    # 轻量微调：仅解冻编码器末尾若干层，0 表示保持冻结
+    trainable_encoder_layers: int = 0
     max_grad_norm: float = 1.0
     # 类别不平衡与标定
-    frame_loss_weights: Optional[Dict[str, float]] = None  # 可对单个框架加权，默认强化moral/resp
+    # 默认提升 moral/resp 权重以拉高稀缺框架的梯度
+    frame_loss_weights: Optional[Dict[str, float]] = None
     calibration_max_iter: int = 50
     calibration_lr: float = 0.01
-    
+    calibration_use_bias: bool = True  # 是否在温度缩放时同时学习logit偏置，修正整体高估
+    pos_weight_cap: float = 8.0  # 控制pos_weight上限，避免极端不平衡时过度推高正例概率
+
+    # 数据切分与采样
+    use_group_split: bool = True  # 默认启用事件/媒体分组切分，减少泄漏
+    group_column: Optional[str] = "event_cluster"
+    fallback_group_columns: Optional[list] = None  # 额外候选列，如 ["cluster_id", "topic_cluster"]
+    publication_column: Optional[str] = "publication"
+    time_column: Optional[str] = "published_at"
+    time_freq: str = "W"  # 按周分组 publication+时间 窗口
+    balance_batches: bool = True  # 基于标签稀缺度的平衡采样
+
+    # 损失函数与动态加权
+    loss_type: str = "focal"  # bce 或 focal
+    focal_gamma: float = 2.0
+    dynamic_frame_reweight: bool = True  # 根据验证误差调整框架权重
+    dynamic_reweight_cap: float = 2.5  # 防止权重大幅波动，同时允许对弱类进一步倾斜
+
+    # 题项级训练
+    item_consistency_weight: float = 0.3  # 题项→框架一致性loss权重
+    return_item_predictions: bool = False  # 推理时是否返回item logits/probs
+
     # 模型保存路径
     model_save_path: str = "./sv2000_models"
     pretrained_model_path: Optional[str] = None
@@ -209,10 +242,26 @@ class SVFramingConfig:
         优先使用本地sentence-transformers副本，避免离线环境拉取失败；
         同时将相对路径解析为仓库内绝对路径。
         """
+        encoder_name_lower = str(self.encoder_name).lower()
+
         if not self.encoder_local_path:
-            local_dir = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
-            if local_dir.exists():
-                self.encoder_local_path = str(local_dir)
+            preferred_local_dirs = ["bge_m3", "bge-m3"]
+            for dir_name in preferred_local_dirs:
+                local_dir = Path(__file__).resolve().parent / dir_name
+                if local_dir.exists():
+                    self.encoder_local_path = str(local_dir)
+                    break
+            if not self.encoder_local_path:
+                if "all-minilm" in encoder_name_lower:
+                    legacy_dir = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
+                    if legacy_dir.exists():
+                        self.encoder_local_path = str(legacy_dir)
+            if not self.encoder_local_path:
+                cache_hit = find_hf_cache_model_path(self.encoder_name)
+                if not cache_hit and "bge" in encoder_name_lower and "m3" in encoder_name_lower:
+                    cache_hit = find_hf_cache_model_path("BAAI/bge-m3")
+                if cache_hit:
+                    self.encoder_local_path = cache_hit
         else:
             path_obj = Path(self.encoder_local_path)
             if not path_obj.is_absolute():
@@ -220,12 +269,34 @@ class SVFramingConfig:
                 if candidate.exists():
                     self.encoder_local_path = str(candidate)
 
+        # 如果仍未找到bge-m3，本地回退到内置的MiniLM以确保离线可运行
+        fallback_dir = Path(__file__).resolve().parent / "all-MiniLM-L6-v2"
+        if (not self.encoder_local_path or not Path(self.encoder_local_path).exists()) and fallback_dir.exists():
+            logger.warning(
+                "未找到本地编码器 %s，已回退到内置的 all-MiniLM-L6-v2，避免离线下载失败",
+                self.encoder_name,
+            )
+            self.encoder_name = "sentence-transformers/all-MiniLM-L6-v2"
+            self.encoder_local_path = str(fallback_dir)
+
         # 确保学习率配置兼容旧字段
         if getattr(self, "encoder_learning_rate", None) is None:
             self.encoder_learning_rate = self.learning_rate
+        # 头部默认更大学习率以便快速收敛（恢复run3配置：1e-3基准）
         if getattr(self, "head_learning_rate", None) is None:
-            # 头部默认更大学习率以便快速收敛（恢复run3配置：1e-3基准）
-            self.head_learning_rate = max(self.learning_rate, 1e-3)
+            self.head_learning_rate = max(self.learning_rate, self.min_head_learning_rate)
+        else:
+            self.head_learning_rate = max(self.head_learning_rate, self.min_head_learning_rate)
+
+        # 默认对 moral/resp 增权，提升梯度信号；允许用户显式覆盖
+        if self.frame_loss_weights is None:
+            self.frame_loss_weights = {
+                "conflict": 1.0,
+                "human": 1.0,
+                "econ": 1.0,
+                "moral": 1.8,
+                "resp": 1.6,
+            }
 
 @dataclass
 class FusionConfig:
@@ -367,4 +438,18 @@ def create_sv2000_config() -> AnalyzerConfig:
     config = AnalyzerConfig()
     config.enable_sv2000_mode()
     config.fusion.use_ridge_optimization = True
+    # 使用最新训练的校准模型，并锁定融合权重为实证最优（只依赖SV2000主模型）
+    latest_calibrated = Path(__file__).resolve().parent / "sv2000_training_results/best_sv2000_model_calibrated.pt"
+    if not latest_calibrated.exists():
+        logger.warning("未找到最新校准模型，回退至旧路径: %s", latest_calibrated)
+        latest_calibrated = Path(__file__).resolve().parent / "outputs/run4_bias_calib/best_sv2000_model_calibrated.pt"
+
+    config.sv_framing.pretrained_model_path = str(latest_calibrated)
+
+    # 按最新验证结果的优化权重：仅使用SV2000预测，关闭辅助项噪声
+    config.fusion.alpha = 1.0
+    config.fusion.beta = 0.0
+    config.fusion.gamma = 0.0
+    config.fusion.delta = 0.0
+    config.fusion.epsilon = 0.0
     return config

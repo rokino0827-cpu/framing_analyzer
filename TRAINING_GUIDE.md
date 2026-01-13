@@ -203,8 +203,8 @@ config = AnalyzerConfig()
 # SV2000配置
 config.sv_framing = SVFramingConfig(
     enabled=True,
-    encoder_name="sentence-transformers/all-MiniLM-L6-v2",
-    hidden_size=384,
+    encoder_name="bge_m3",
+    hidden_size=1024,
     dropout_rate=0.1,
     learning_rate=2e-5,
     batch_size=16,

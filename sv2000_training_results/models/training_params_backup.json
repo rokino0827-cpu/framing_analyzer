@@ -1,0 +1,281 @@
+{
+  "timestamp": "2026-01-10T04:21:37.662528Z",
+  "data_path": "data/filtered_labels_with_average.csv",
+  "output_dir": "./sv2000_training_results/models",
+  "hyperparameters": {
+    "epochs": 15,
+    "batch_size": 16,
+    "learning_rate": 2e-05,
+    "encoder_learning_rate": 2e-05,
+    "head_learning_rate": null,
+    "dropout_rate": 0.1,
+    "validation_split": 0.2,
+    "test_split": 0.1,
+    "early_stopping_patience": 3,
+    "max_length": 512,
+    "training_mode": "frame_level",
+    "device": "auto",
+    "fine_tune_encoder": false,
+    "max_grad_norm": 1.0,
+    "frame_loss_weights": null,
+    "optimize_weights": true,
+    "ridge_alpha": 1.0,
+    "cv_folds": 5,
+    "evaluate": true
+  },
+  "sv_framing_config": {
+    "enabled": true,
+    "encoder_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "encoder_local_path": "/root/autodl-tmp/framing_analyzer/all-MiniLM-L6-v2",
+    "hidden_size": 384,
+    "dropout_rate": 0.1,
+    "learning_rate": 2e-05,
+    "encoder_learning_rate": 2e-05,
+    "head_learning_rate": 0.001,
+    "training_mode": "frame_level",
+    "device": "auto",
+    "batch_size": 16,
+    "max_length": 512,
+    "fine_tune_encoder": false,
+    "max_grad_norm": 1.0,
+    "frame_loss_weights": null,
+    "calibration_max_iter": 50,
+    "calibration_lr": 0.01,
+    "model_save_path": "./sv2000_training_results/models",
+    "pretrained_model_path": null
+  },
+  "fusion_config": {
+    "alpha": 0.5,
+    "beta": 0.2,
+    "gamma": 0.15,
+    "delta": 0.1,
+    "epsilon": 0.05,
+    "enforce_positive_weights": true,
+    "normalize_weights": true,
+    "use_ridge_optimization": true,
+    "ridge_alpha": 1.0,
+    "cross_validation_folds": 5
+  },
+  "data_validation": {
+    "is_valid": true,
+    "issues": [
+      "Missing expected user columns: ['author', 'url', 'section', 'publication', 'avg_stratum']"
+    ],
+    "recommendations": [
+      "Excellent dataset size for robust training",
+      "Data from single annotator - consider inter-annotator reliability checks"
+    ],
+    "detected_format": "user_machine_annotated",
+    "column_mapping": {
+      "content": "content",
+      "title": "title",
+      "id": "article_id",
+      "y_conflict_questions": [
+        "sv_conflict_q1_reflects_disagreement",
+        "sv_conflict_q2_refers_to_two_sides",
+        "sv_conflict_q3_refers_to_winners_losers_optional",
+        "sv_conflict_q4_reproach_between_sides"
+      ],
+      "y_human_questions": [
+        "sv_human_q1_human_example_or_face",
+        "sv_human_q2_adjectives_personal_vignettes",
+        "sv_human_q3_feelings_empathy",
+        "sv_human_q4_how_people_affected",
+        "sv_human_q5_visual_information_optional"
+      ],
+      "y_econ_questions": [
+        "sv_econ_q1_financial_losses_gains",
+        "sv_econ_q2_costs_degree_of_expense",
+        "sv_econ_q3_economic_consequences_pursue_or_not"
+      ],
+      "y_moral_questions": [
+        "sv_moral_q1_moral_message",
+        "sv_moral_q2_morality_god_religious_tenets",
+        "sv_moral_q3_social_prescriptions"
+      ],
+      "y_resp_questions": [
+        "sv_resp_q1_government_ability_solve",
+        "sv_resp_q2_individual_group_responsible",
+        "sv_resp_q3_government_responsible",
+        "sv_resp_q4_solution_proposed",
+        "sv_resp_q5_urgent_action_required_optional"
+      ]
+    },
+    "total_samples": 7797,
+    "valid_samples": 7797,
+    "question_coverage": {
+      "conflict": {
+        "available": 4,
+        "total": 4,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "human": {
+        "available": 5,
+        "total": 5,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "econ": {
+        "available": 3,
+        "total": 3,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "moral": {
+        "available": 3,
+        "total": 3,
+        "coverage": 1.0,
+        "missing": []
+      },
+      "resp": {
+        "available": 5,
+        "total": 5,
+        "coverage": 1.0,
+        "missing": []
+      }
+    },
+    "frame_avg_stats": {
+      "mean": 0.14522380402718993,
+      "std": 0.12007125294170377,
+      "min": 0.0,
+      "max": 0.7766666666666666,
+      "valid_count": 7797
+    },
+    "annotator_stats": {
+      "unique_annotators": 1,
+      "samples_per_annotator": {
+        "LLM_annotator_v1": 7797
+      }
+    },
+    "data_statistics": {
+      "total_samples": 7797,
+      "columns": [
+        "article_id",
+        "title",
+        "content",
+        "annotator_id",
+        "sv_conflict_q1_reflects_disagreement",
+        "sv_conflict_q2_refers_to_two_sides",
+        "sv_conflict_q3_refers_to_winners_losers_optional",
+        "sv_conflict_q4_reproach_between_sides",
+        "sv_human_q1_human_example_or_face",
+        "sv_human_q2_adjectives_personal_vignettes",
+        "sv_human_q3_feelings_empathy",
+        "sv_human_q4_how_people_affected",
+        "sv_human_q5_visual_information_optional",
+        "sv_econ_q1_financial_losses_gains",
+        "sv_econ_q2_costs_degree_of_expense",
+        "sv_econ_q3_economic_consequences_pursue_or_not",
+        "sv_moral_q1_moral_message",
+        "sv_moral_q2_morality_god_religious_tenets",
+        "sv_moral_q3_social_prescriptions",
+        "sv_resp_q1_government_ability_solve",
+        "sv_resp_q2_individual_group_responsible",
+        "sv_resp_q3_government_responsible",
+        "sv_resp_q4_solution_proposed",
+        "sv_resp_q5_urgent_action_required_optional",
+        "sv_notes",
+        "sv_average_score",
+        "id",
+        "y_conflict",
+        "y_conflict_disagreement",
+        "y_conflict_sides",
+        "y_conflict_optional",
+        "y_human",
+        "y_human_face",
+        "y_human_vignettes",
+        "y_human_empathy",
+        "y_human_affected",
+        "y_human_optional",
+        "y_econ",
+        "y_econ_gains",
+        "y_econ_expense",
+        "y_econ_not",
+        "y_moral",
+        "y_moral_message",
+        "y_moral_tenets",
+        "y_moral_prescriptions",
+        "y_resp",
+        "y_resp_solve",
+        "y_resp_responsible",
+        "y_resp_proposed",
+        "y_resp_optional",
+        "sv_frame_avg"
+      ],
+      "text_statistics": {
+        "mean_length": 3610.886238296781,
+        "median_length": 2610.0,
+        "min_length": 3,
+        "max_length": 33082,
+        "std_length": 3734.2669895808517
+      },
+      "frame_statistics": {
+        "y_conflict": {
+          "mean": 0.1245030139797358,
+          "std": 0.22990734720539377,
+          "min": 0.0,
+          "max": 1.0,
+          "median": 0.0
+        },
+        "y_human": {
+          "mean": 0.20697704245222523,
+          "std": 0.2949246690284907,
+          "min": 0.0,
+          "max": 1.0,
+          "median": 0.0
+        },
+        "y_econ": {
+          "mean": 0.18250609208670002,
+          "std": 0.25620525624083573,
+          "min": 0.0,
+          "max": 1.0,
+          "median": 0.0
+        },
+        "y_moral": {
+          "mean": 0.04065666281903296,
+          "std": 0.13762787022302,
+          "min": 0.0,
+          "max": 1.0,
+          "median": 0.0
+        },
+        "y_resp": {
+          "mean": 0.17147620879825573,
+          "std": 0.17067468990399257,
+          "min": 0.0,
+          "max": 1.0,
+          "median": 0.2
+        }
+      }
+    },
+    "sample_preview": [
+      {
+        "content": "CAPE TOWN (Reuters) - Olympic swimming gold medalist Chad le Clos had to leave his Turkish base in a rush after his training schedule for the Tokyo 2020 Games was thrown into disarray, and has doubts ...",
+        "title": "Swimming: Le Clos faces uncertain training future amid Olympic doubts",
+        "y_conflict": 0.0,
+        "y_human": 0.8,
+        "y_econ": 0.0,
+        "y_moral": 0.0,
+        "y_resp": 0.0
+      },
+      {
+        "content": "Huawei¡¯s revenue grew by 19.1 percent last year to around $121 billion, but the company says those numbers would be far higher if the United States had not cracked down on its ability to do business....",
+        "title": "Huawei says US trade ban is a ¡®big difficulty¡¯ to selling phones",
+        "y_conflict": 0.5,
+        "y_human": 0.2,
+        "y_econ": 0.3333333333333333,
+        "y_moral": 0.0,
+        "y_resp": 0.0
+      },
+      {
+        "content": "March 17 (Reuters) - Canopy Growth Corp: * CANOPY GROWTH TO TEMPORARILY CLOSE CORPORATE OWNED RETAIL AMID RESPONSE TO COVID-19 * CANOPY GROWTH CORP - HAS BEEN MONITORING COVID-19 OUTBREAK * CANOPY GRO...",
+        "title": "BRIEF-Canopy Growth To Temporarily Close Corporate Owned Retail Amid Response To Covid-19",
+        "y_conflict": 0.0,
+        "y_human": 0.0,
+        "y_econ": 0.0,
+        "y_moral": 0.0,
+        "y_resp": 0.2
+      }
+    ]
+  }
+}
