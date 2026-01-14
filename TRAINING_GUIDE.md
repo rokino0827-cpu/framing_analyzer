@@ -116,9 +116,24 @@ python framing_analyzer/train_sv2000_model.py \
     --validation_split 0.2 \
     --early_stopping_patience 5 \
     --device cuda \
+    --corr_loss_weight 0.1 \
+    --frame_avg_loss_weight 0.1 \
     --optimize_weights \
     --evaluate
 ```
+
+### 高分预设（自动提分开关）
+
+```bash
+python framing_analyzer/train_sv2000_model.py \
+    --data_path ./data/training_data.csv \
+    --output_dir ./models_highscore \
+    --epochs 12 \
+    --preset high_score \
+    --evaluate
+```
+
+预设会自动启用 item-level 训练、轻量微调编码器（默认解冻末4层）、梯度累积=2、Focal γ=1.5、相关性/均值对齐损失以及 moral/resp 增权，并强制验证/测试集满足最少正例覆盖（默认验证每框架≥2，测试≥1，最多重试6次）。
 
 ### 训练参数说明
 
@@ -132,6 +147,12 @@ python framing_analyzer/train_sv2000_model.py \
 | `--early_stopping_patience` | 3 | 早停耐心值 |
 | `--device` | auto | 计算设备 |
 | `--optimize_weights` | False | 是否优化融合权重 |
+| `--corr_loss_weight` | 0.1 | 相关性辅助损失权重，直接对齐Pearson指标 |
+| `--frame_avg_loss_weight` | 0.1 | 框架平均分Huber权重，矫正整体偏移 |
+| `--no_save_encoder_state` | False | 是否禁用保存编码器权重（默认保存便于微调复现） |
+- `--accumulation_steps` | 1 | 梯度累积步数，显存受限时放大等效batch |
+- `--min_pos_per_frame_val`/`--min_pos_per_frame_test` | 1/1 | 验证/测试集每个框架的最少正例数量，避免指标缺失 |
+- `--split_retry_limit` | 5 | 在满足最小正例覆盖前的切分重试次数 |
 
 ### 使用自定义编码器
 

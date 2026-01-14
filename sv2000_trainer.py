@@ -66,6 +66,7 @@ class SVFramingTrainer:
         # 训练状态
         self.best_val_loss = float('inf')
         self.best_val_correlation = -1.0
+        self.best_val_metric_value = -1.0
         self.best_val_metrics = None
         self.best_epoch = None
         self.patience_counter = 0
@@ -290,7 +291,8 @@ class SVFramingTrainer:
             'train_loss': [],
             'val_loss': [],
             'val_correlation': [],
-            'learning_rate': []
+            'learning_rate': [],
+            'val_selection_metric': [],
         }
         
         # 训练循环
@@ -314,20 +316,29 @@ class SVFramingTrainer:
                 self.scheduler.step(val_loss)
                 current_lr = self.optimizer.param_groups[0]['lr']
                 history['learning_rate'].append(current_lr)
-                
-                logger.info(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}, "
-                           f"Val Correlation: {val_correlation:.4f}, LR: {current_lr:.6f}")
+
+                # 选择指标：默认frame_avg_pearson，可通过config.selection_metric切换
+                selection_metric = getattr(self.config, "selection_metric", "frame_avg_pearson")
+                selection_value = val_metrics.get(selection_metric, val_correlation)
+                history['val_selection_metric'].append(selection_value)
+
+                logger.info(
+                    "Train Loss: %.4f, Val Loss: %.4f, Val Corr: %.4f, Sel(%s)=%.4f, LR: %.6f",
+                    train_loss, val_loss, val_correlation, selection_metric, selection_value, current_lr
+                )
                 self._log_prediction_stats(val_metrics, split="val")
                 self._update_dynamic_weights(val_metrics)
-                
+
                 # 早停检查
-                if val_correlation > self.best_val_correlation:
+                improved = selection_value > self.best_val_metric_value
+                if improved:
                     self.best_val_correlation = val_correlation
+                    self.best_val_metric_value = selection_value
                     self.best_val_loss = val_loss
                     self.best_val_metrics = val_metrics
                     self.best_epoch = epoch + 1
                     self.patience_counter = 0
-                    
+
                     if save_best:
                         self._save_best_model()
                 else:
@@ -345,17 +356,20 @@ class SVFramingTrainer:
         history['best_epoch'] = self.best_epoch
         history['best_val_loss'] = self.best_val_loss if self.best_val_loss != float('inf') else None
         history['best_val_correlation'] = self.best_val_correlation if self.best_val_correlation != -1.0 else None
+        history['best_val_selection_metric'] = self.best_val_metric_value if self.best_val_metric_value != -1.0 else None
         return history
     
     def _train_epoch(self, texts: List[str], targets: np.ndarray) -> float:
-        """训练一个epoch"""
+        """训练一个epoch，支持梯度累积降低显存占用"""
         self.model.train_mode()
         total_loss = 0.0
-        num_batches = 0
-        
-        # 创建批次
+        num_steps = 0
+
         batch_size = self.config.batch_size
         indices = self._build_epoch_indices(targets)
+        accumulation_steps = max(1, getattr(self.config, "accumulation_steps", 1))
+
+        self.optimizer.zero_grad()
         for start in tqdm(range(0, len(indices), batch_size), desc="Training"):
             batch_idx = indices[start:start + batch_size]
             batch_texts = [texts[j] for j in batch_idx]
@@ -369,9 +383,25 @@ class SVFramingTrainer:
 
             targets_tensor = torch.FloatTensor(batch_targets).to(self.device)
             loss = self._calculate_loss(logits, targets_tensor, frame_logits)
+            loss = loss / accumulation_steps
 
-            self.optimizer.zero_grad()
             loss.backward()
+            num_steps += 1
+
+            if num_steps % accumulation_steps == 0:
+                max_grad_norm = getattr(self.config, "max_grad_norm", None)
+                if max_grad_norm is not None and max_grad_norm > 0:
+                    params_to_clip = list(self.model.frame_classifier.parameters())
+                    if self.enable_encoder_grad and self.model.encoder is not None:
+                        params_to_clip += list(self.model.encoder.parameters())
+                    torch.nn.utils.clip_grad_norm_(params_to_clip, max_grad_norm)
+                self.optimizer.step()
+                self.optimizer.zero_grad()
+
+            total_loss += loss.item() if hasattr(loss, "item") else float(loss)
+
+        # 处理不足accumulation_steps的残余梯度
+        if num_steps % accumulation_steps != 0:
             max_grad_norm = getattr(self.config, "max_grad_norm", None)
             if max_grad_norm is not None and max_grad_norm > 0:
                 params_to_clip = list(self.model.frame_classifier.parameters())
@@ -379,11 +409,10 @@ class SVFramingTrainer:
                     params_to_clip += list(self.model.encoder.parameters())
                 torch.nn.utils.clip_grad_norm_(params_to_clip, max_grad_norm)
             self.optimizer.step()
+            self.optimizer.zero_grad()
 
-            total_loss += loss.item() if hasattr(loss, "item") else float(loss)
-            num_batches += 1
-        
-        return total_loss / num_batches if num_batches > 0 else 0.0
+        effective_batches = max(1, num_steps)
+        return total_loss / effective_batches
     
     def evaluate(self, texts: List[str], targets: np.ndarray, return_outputs: bool = False):
         """评估模型性能并可选返回预测/标签"""
@@ -467,6 +496,35 @@ class SVFramingTrainer:
             self.criterion(logits_for_loss, targets_tensor), logits_for_loss.shape[1]
         )
 
+        # 框架级辅助约束：均值对齐与相关性优化（直接服务验证指标）
+        frame_logits_for_aux = frame_logits
+        if frame_logits_for_aux is None and self.model.uses_item_level:
+            frame_logits_for_aux = self.model.aggregate_item_logits(logits)
+        if frame_logits_for_aux is None and not self.model.uses_item_level:
+            frame_logits_for_aux = logits
+
+        aux_targets = targets_tensor
+        if aux_targets.shape[1] != self.frame_loss_weights.numel():
+            aux_targets = self.model.aggregate_item_targets(targets_tensor)
+
+        if frame_logits_for_aux is not None and aux_targets is not None:
+            frame_probs = torch.sigmoid(frame_logits_for_aux)
+            # 平均分Huber约束，避免整体偏移（匹配最终评分口径）
+            avg_weight = max(0.0, getattr(self.config, "frame_avg_loss_weight", 0.0))
+            if avg_weight > 0:
+                avg_loss = F.smooth_l1_loss(
+                    frame_probs.mean(dim=1),
+                    aux_targets.mean(dim=1)
+                )
+                main_loss = main_loss + avg_weight * avg_loss
+
+            # 直接优化Pearson相关性，向目标评测对齐
+            corr_weight = max(0.0, getattr(self.config, "corr_loss_weight", 0.0))
+            if corr_weight > 0:
+                corr_loss = self._pearson_loss(frame_probs, aux_targets)
+                if torch.isfinite(corr_loss):
+                    main_loss = main_loss + corr_weight * corr_loss
+
         if (
             frame_logits is not None
             and self.model.uses_item_level
@@ -491,6 +549,19 @@ class SVFramingTrainer:
                 frame_logits, frame_targets
             )
         return F.binary_cross_entropy_with_logits(frame_logits, frame_targets, reduction="none")
+
+    @staticmethod
+    def _pearson_loss(preds: torch.Tensor, targets: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """将相关性转为可微损失，越小相关性越高"""
+        preds_centered = preds - preds.mean(dim=0, keepdim=True)
+        targets_centered = targets - targets.mean(dim=0, keepdim=True)
+        num = (preds_centered * targets_centered).sum(dim=0)
+        denom = torch.sqrt(
+            (preds_centered.pow(2).sum(dim=0) + eps) * (targets_centered.pow(2).sum(dim=0) + eps)
+        )
+        corr = torch.where(denom > 0, num / denom, torch.zeros_like(num))
+        corr = corr.clamp(min=-1.0, max=1.0)
+        return (1 - corr).mean()
 
     def _update_dynamic_weights(self, val_metrics: Dict):
         """基于验证MAE动态调整框架权重"""
@@ -696,7 +767,8 @@ class SVFramingTrainer:
             "bias": optimized_bias.cpu().tolist() if optimized_bias is not None else None,
             "calibrated_loss": calibrated_loss,
             "optimizer": "LBFGS",
-            "max_iter": max_iter
+            "max_iter": max_iter,
+            "selection_metric": getattr(self.config, "selection_metric", "frame_avg_pearson"),
         }
 
     def _collect_logits(self, texts: List[str]) -> torch.Tensor:

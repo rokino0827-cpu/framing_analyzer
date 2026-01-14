@@ -570,12 +570,27 @@ class SVFramingHead:
     
     def save_model(self, path: str):
         """保存模型"""
-        torch.save({
+        payload = {
             'frame_classifier_state_dict': self.frame_classifier.state_dict(),
             'config': self.config,
             'temperature': self.temperature.detach().cpu(),
-            'logit_bias': self.logit_bias.detach().cpu()
-        }, path)
+            'logit_bias': self.logit_bias.detach().cpu(),
+            'encoder_backend': self.encoder_backend,
+        }
+
+        save_encoder = (
+            getattr(self.config, "save_encoder_state", False)
+            or getattr(self.config, "fine_tune_encoder", False)
+            or getattr(self.config, "trainable_encoder_layers", 0) > 0
+            or self.enable_encoder_grad
+        )
+        if save_encoder and self.encoder is not None:
+            try:
+                payload['encoder_state_dict'] = self.encoder.state_dict()
+            except Exception as exc:
+                logger.warning("保存编码器权重失败，将仅保存分类头: %s", exc)
+
+        torch.save(payload, path)
         logger.info(f"SV2000 model saved to {path}")
     
     def load_model(self, path: str):
@@ -588,6 +603,18 @@ class SVFramingHead:
         # logit偏置为可选，兼容旧模型
         if 'logit_bias' in checkpoint:
             self.set_logit_bias(checkpoint['logit_bias'])
+        # 兼容微调：如果存储了编码器参数则一并恢复
+        if 'encoder_state_dict' in checkpoint and self.encoder is not None:
+            saved_backend = checkpoint.get('encoder_backend')
+            if saved_backend and saved_backend != self.encoder_backend:
+                logger.warning("加载的编码器后端(%s)与当前实例(%s)不一致，仍尝试加载权重", saved_backend, self.encoder_backend)
+            missing, unexpected = self.encoder.load_state_dict(
+                checkpoint['encoder_state_dict'], strict=False
+            )
+            if missing:
+                logger.warning("编码器权重缺失键：%s", missing)
+            if unexpected:
+                logger.warning("编码器权重包含未使用键：%s", unexpected)
         logger.info(f"SV2000 model loaded from {path}")
     
     def eval_mode(self):

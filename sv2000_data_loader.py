@@ -376,6 +376,24 @@ class SV2000DataLoader:
         top_groups = groups.value_counts().head(5).to_dict()
         self.grouping_info["top_groups"] = top_groups
         logger.info("Group split覆盖: top groups %s", top_groups)
+
+    @staticmethod
+    def _count_positive_by_frame(df: Optional[pd.DataFrame], frame_columns: List[str]) -> Dict[str, int]:
+        """统计各框架的正例数量（>0视为正例），便于约束验证"""
+        if df is None or len(df) == 0:
+            return {col: 0 for col in frame_columns}
+        return {col: int((df[col] > 0).sum()) for col in frame_columns if col in df.columns}
+
+    def _meets_min_positive(self, df: Optional[pd.DataFrame], min_pos: int, frame_columns: List[str]) -> bool:
+        """判断数据分片是否满足每个框架的最小正例约束"""
+        if min_pos <= 0 or df is None or len(df) == 0:
+            return True
+        counts = self._count_positive_by_frame(df, frame_columns)
+        missing = {f: c for f, c in counts.items() if c < min_pos}
+        if missing:
+            logger.debug("正例约束未满足: %s (要求>=%d)", missing, min_pos)
+            return False
+        return True
     
     def get_training_data(self, mode: str = "frame_level", split: str = "train") -> Tuple[List[str], np.ndarray]:
         """获取训练数据
@@ -440,7 +458,7 @@ class SV2000DataLoader:
         if len(self.df) == 0:
             logger.error("No data available for splitting")
             return
-        seed = self.random_seed if random_seed is None else random_seed
+        seed_base = self.random_seed if random_seed is None else random_seed
         groups = self._get_group_labels()
         group_ready = groups is not None and groups.nunique() > 1
         self.grouping_info = {
@@ -448,51 +466,92 @@ class SV2000DataLoader:
             "group_candidates": groups.nunique() if groups is not None else 0
         }
 
-        # 首先分离测试集
-        if test_ratio > 0:
-            if group_ready:
-                splitter = GroupShuffleSplit(n_splits=1, test_size=test_ratio, random_state=seed)
-                train_idx, test_idx = next(splitter.split(self.df, groups=groups))
-                train_val_df = self.df.iloc[train_idx]
-                self.test_df = self.df.iloc[test_idx]
+        cfg = getattr(self.config, "sv_framing", self.config)
+        min_pos_val = max(0, getattr(cfg, "min_pos_per_frame_val", 0) or 0)
+        min_pos_test = max(0, getattr(cfg, "min_pos_per_frame_test", 0) or 0)
+        retry_limit = max(1, getattr(cfg, "split_retry_limit", 1) or 1)
+        frame_columns = ['y_conflict', 'y_human', 'y_econ', 'y_moral', 'y_resp']
+
+        attempts = 0
+        last_val_counts: Dict[str, int] = {}
+        last_test_counts: Dict[str, int] = {}
+
+        for attempt in range(retry_limit):
+            attempts = attempt + 1
+            seed = seed_base + attempt
+
+            # 首先分离测试集
+            if test_ratio > 0:
+                if group_ready:
+                    splitter = GroupShuffleSplit(n_splits=1, test_size=test_ratio, random_state=seed)
+                    train_idx, test_idx = next(splitter.split(self.df, groups=groups))
+                    train_val_df = self.df.iloc[train_idx]
+                    test_df_tmp = self.df.iloc[test_idx]
+                else:
+                    train_val_df, test_df_tmp = train_test_split(
+                        self.df,
+                        test_size=test_ratio,
+                        random_state=seed,
+                        stratify=None
+                    )
             else:
-                train_val_df, self.test_df = train_test_split(
-                    self.df,
-                    test_size=test_ratio,
-                    random_state=seed,
-                    stratify=None
-                )
-        else:
-            train_val_df = self.df
-            self.test_df = None
-        
-        # 然后分离训练集和验证集
-        if val_ratio > 0:
-            if group_ready:
-                groups_tv = groups.iloc[train_val_df.index]
-                splitter = GroupShuffleSplit(
-                    n_splits=1,
-                    test_size=val_ratio / (1 - test_ratio),
-                    random_state=seed
-                )
-                train_idx, val_idx = next(splitter.split(train_val_df, groups=groups_tv))
-                self.train_df = train_val_df.iloc[train_idx]
-                self.val_df = train_val_df.iloc[val_idx]
+                train_val_df = self.df
+                test_df_tmp = None
+            
+            # 然后分离训练集和验证集
+            if val_ratio > 0:
+                if group_ready:
+                    groups_tv = groups.iloc[train_val_df.index]
+                    splitter = GroupShuffleSplit(
+                        n_splits=1,
+                        test_size=val_ratio / (1 - test_ratio),
+                        random_state=seed
+                    )
+                    train_idx, val_idx = next(splitter.split(train_val_df, groups=groups_tv))
+                    train_df_tmp = train_val_df.iloc[train_idx]
+                    val_df_tmp = train_val_df.iloc[val_idx]
+                else:
+                    train_df_tmp, val_df_tmp = train_test_split(
+                        train_val_df,
+                        test_size=val_ratio / (1 - test_ratio),
+                        random_state=seed
+                    )
             else:
-                self.train_df, self.val_df = train_test_split(
-                    train_val_df,
-                    test_size=val_ratio / (1 - test_ratio),
-                    random_state=seed
-                )
+                train_df_tmp = train_val_df
+                val_df_tmp = None
+
+            last_val_counts = self._count_positive_by_frame(val_df_tmp, frame_columns)
+            last_test_counts = self._count_positive_by_frame(test_df_tmp, frame_columns)
+
+            val_ok = self._meets_min_positive(val_df_tmp, min_pos_val, frame_columns)
+            test_ok = self._meets_min_positive(test_df_tmp, min_pos_test, frame_columns)
+            self.train_df, self.val_df, self.test_df = train_df_tmp, val_df_tmp, test_df_tmp
+
+            if val_ok and test_ok:
+                if attempts > 1:
+                    logger.info("数据切分在第%d次尝试后满足正例覆盖约束", attempts)
+                break
+
+            logger.warning(
+                "切分未满足正例约束(尝试%d/%d)，将使用新的随机种子重试... "
+                "(val_min=%d, test_min=%d, val_counts=%s, test_counts=%s)",
+                attempts, retry_limit, min_pos_val, min_pos_test, last_val_counts, last_test_counts
+            )
         else:
-            self.train_df = train_val_df
-            self.val_df = None
+            logger.warning("达到最大切分重试次数，使用最后一次结果（可能缺少部分框架正例）")
         
         logger.info("Data split completed (group_split=%s):", group_ready)
         logger.info(f"  Train: {len(self.train_df) if self.train_df is not None else 0}")
         logger.info(f"  Val: {len(self.val_df) if self.val_df is not None else 0}")
         logger.info(f"  Test: {len(self.test_df) if self.test_df is not None else 0}")
         self._log_group_split(groups, group_ready)
+        self.grouping_info["positive_coverage"] = {
+            "val": last_val_counts,
+            "test": last_test_counts,
+            "min_pos_val": min_pos_val,
+            "min_pos_test": min_pos_test,
+            "attempts": attempts,
+        }
     
     def get_data_statistics(self) -> Dict:
         """获取数据集统计信息"""

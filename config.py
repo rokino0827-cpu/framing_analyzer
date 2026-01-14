@@ -196,6 +196,12 @@ class SVFramingConfig:
     head_learning_rate: Optional[float] = None
     min_head_learning_rate: float = 1e-3
     training_mode: str = "frame_level"  # "frame_level" 或 "item_level"
+    selection_metric: str = "frame_avg_pearson"  # 用于早停/最佳模型选择的验证指标
+    accumulation_steps: int = 1  # 梯度累积步数，>1 可在显存不变的情况下放大等效batch
+    # 切分与覆盖约束
+    split_retry_limit: int = 5  # 切分失败时的最大重试次数（满足最小正例覆盖）
+    min_pos_per_frame_val: int = 1  # 验证集每个框架最少正例数，0表示不做约束
+    min_pos_per_frame_test: int = 1  # 测试集每个框架最少正例数，0表示不做约束
     device: str = "auto"
     batch_size: int = 16
     max_length: int = 512
@@ -213,6 +219,10 @@ class SVFramingConfig:
     calibration_lr: float = 0.01
     calibration_use_bias: bool = True  # 是否在温度缩放时同时学习logit偏置，修正整体高估
     pos_weight_cap: float = 8.0  # 控制pos_weight上限，避免极端不平衡时过度推高正例概率
+    # 评价对齐与均值约束
+    corr_loss_weight: float = 0.1  # 相关性辅助损失权重，直接优化Pearson
+    frame_avg_loss_weight: float = 0.1  # 框架平均分Huber损失权重，防止整体偏移
+    save_encoder_state: bool = True  # 训练后是否一并保存编码器权重，便于微调持久化
 
     # 数据切分与采样
     use_group_split: bool = True  # 默认启用事件/媒体分组切分，减少泄漏
@@ -279,6 +289,23 @@ class SVFramingConfig:
             self.encoder_name = "sentence-transformers/all-MiniLM-L6-v2"
             self.encoder_local_path = str(fallback_dir)
 
+        # 自动绑定最新评测约70%相关性的校准模型
+        if self.pretrained_model_path:
+            path_obj = Path(self.pretrained_model_path)
+            if not path_obj.is_absolute():
+                candidate = Path(__file__).resolve().parent / path_obj
+                if candidate.exists():
+                    self.pretrained_model_path = str(candidate)
+        else:
+            best_calibrated = Path(__file__).resolve().parent / "sv2000_training_results/best_sv2000_model_calibrated.pt"
+            if best_calibrated.exists():
+                self.pretrained_model_path = str(best_calibrated)
+            else:
+                legacy_calibrated = Path(__file__).resolve().parent / "outputs/run4_bias_calib/best_sv2000_model_calibrated.pt"
+                if legacy_calibrated.exists():
+                    logger.warning("最新校准模型缺失，回退至legacy: %s", legacy_calibrated)
+                    self.pretrained_model_path = str(legacy_calibrated)
+
         # 确保学习率配置兼容旧字段
         if getattr(self, "encoder_learning_rate", None) is None:
             self.encoder_learning_rate = self.learning_rate
@@ -297,6 +324,9 @@ class SVFramingConfig:
                 "moral": 1.8,
                 "resp": 1.6,
             }
+        # 防止负权重意外导致loss为负
+        self.corr_loss_weight = max(0.0, self.corr_loss_weight)
+        self.frame_avg_loss_weight = max(0.0, self.frame_avg_loss_weight)
 
 @dataclass
 class FusionConfig:

@@ -62,6 +62,14 @@ def create_training_config(args) -> AnalyzerConfig:
     config.sv_framing.fine_tune_encoder = args.fine_tune_encoder
     config.sv_framing.trainable_encoder_layers = args.trainable_encoder_layers
     config.sv_framing.max_grad_norm = args.max_grad_norm
+    if args.accumulation_steps:
+        config.sv_framing.accumulation_steps = args.accumulation_steps
+    if args.split_retry_limit is not None:
+        config.sv_framing.split_retry_limit = args.split_retry_limit
+    if args.min_pos_per_frame_val is not None:
+        config.sv_framing.min_pos_per_frame_val = args.min_pos_per_frame_val
+    if args.min_pos_per_frame_test is not None:
+        config.sv_framing.min_pos_per_frame_test = args.min_pos_per_frame_test
     
     # 编码器配置
     if args.encoder_name:
@@ -91,6 +99,9 @@ def create_training_config(args) -> AnalyzerConfig:
     config.sv_framing.dynamic_frame_reweight = not args.disable_dynamic_reweight
     config.sv_framing.item_consistency_weight = args.item_consistency_weight
     config.sv_framing.return_item_predictions = args.return_item_predictions
+    config.sv_framing.corr_loss_weight = args.corr_loss_weight
+    config.sv_framing.frame_avg_loss_weight = args.frame_avg_loss_weight
+    config.sv_framing.save_encoder_state = not args.no_save_encoder_state
     
     # 框架loss权重（JSON字符串）
     if args.frame_loss_weights:
@@ -127,6 +138,43 @@ def validate_data(data_path: str, config: AnalyzerConfig) -> Dict[str, Any]:
         logger.warning("训练样本数量较少，可能影响模型性能")
     
     return validation_results
+
+def apply_training_preset(args: argparse.Namespace) -> None:
+    """应用内置高分预设，减少手工调参"""
+    if args.preset is None:
+        return
+
+    if args.preset == "high_score":
+        logger.info("应用高分预设: item-level + 轻量微调 + 相关性对齐")
+        args.training_mode = "item_level"
+        args.fine_tune_encoder = True
+        args.trainable_encoder_layers = max(args.trainable_encoder_layers or 0, 4)
+        args.accumulation_steps = max(args.accumulation_steps or 1, 2)
+        args.learning_rate = args.learning_rate or 1e-3
+        args.encoder_learning_rate = args.encoder_learning_rate or 2e-5
+        args.head_learning_rate = args.head_learning_rate or max(args.learning_rate, 1.5e-3)
+        args.dropout_rate = max(args.dropout_rate, 0.15)
+        args.loss_type = "focal"
+        args.focal_gamma = 1.5
+        args.item_consistency_weight = max(args.item_consistency_weight, 0.35)
+        args.corr_loss_weight = max(args.corr_loss_weight, 0.15)
+        args.frame_avg_loss_weight = max(args.frame_avg_loss_weight, 0.15)
+        args.min_pos_per_frame_val = max(args.min_pos_per_frame_val or 0, 2)
+        args.min_pos_per_frame_test = max(args.min_pos_per_frame_test or 0, 1)
+        args.split_retry_limit = max(args.split_retry_limit or 0, 6)
+        if not args.frame_loss_weights:
+            args.frame_loss_weights = '{"moral":1.9,"resp":1.7,"conflict":1.1,"human":1.0,"econ":1.0}'
+        logger.info(
+            "预设完成: mode=%s, fine_tune=%s, head_lr=%.1e, encoder_lr=%.1e, acc_steps=%d, "
+            "min_pos_val=%d, min_pos_test=%d",
+            args.training_mode,
+            args.fine_tune_encoder,
+            args.head_learning_rate,
+            args.encoder_learning_rate,
+            args.accumulation_steps,
+            args.min_pos_per_frame_val,
+            args.min_pos_per_frame_test,
+        )
 
 def train_model(args):
     """训练SV2000模型"""
@@ -289,6 +337,8 @@ def main():
                        help="是否微调编码器（默认冻结）")
     parser.add_argument("--max_grad_norm", type=float, default=1.0,
                        help="梯度裁剪阈值，0或负数表示不裁剪")
+    parser.add_argument("--accumulation_steps", type=int, default=None,
+                       help="梯度累积步数，>1可在显存不变下放大等效batch")
     parser.add_argument("--frame_loss_weights", type=str, default=None,
                        help="JSON 字典自定义框架loss权重，如 '{\"moral\":1.6,\"resp\":1.4}'")
     parser.add_argument("--loss_type", type=str, default="focal", choices=["bce", "focal"],
@@ -297,6 +347,12 @@ def main():
                        help="Focal loss gamma")
     parser.add_argument("--item_consistency_weight", type=float, default=0.3,
                        help="题项→框架一致性loss权重，0可关闭")
+    parser.add_argument("--corr_loss_weight", type=float, default=0.1,
+                       help="Pearson相关性辅助损失权重，直接对齐评测指标")
+    parser.add_argument("--frame_avg_loss_weight", type=float, default=0.1,
+                       help="框架平均分Huber损失权重，抑制整体偏移")
+    parser.add_argument("--no_save_encoder_state", action="store_true",
+                       help="仅保存分类头权重（默认保存编码器以支持微调持久化）")
     parser.add_argument("--no_balance_batches", action="store_true",
                        help="禁用基于标签稀缺度的平衡采样")
     parser.add_argument("--disable_dynamic_reweight", action="store_true",
@@ -315,6 +371,12 @@ def main():
                        help="时间列名（ISO时间或日期字符串）")
     parser.add_argument("--time_freq", type=str, default="W",
                        help="时间窗口频率，默认为周W，可设为M/D")
+    parser.add_argument("--min_pos_per_frame_val", type=int, default=None,
+                       help="验证集每个框架的最小正例数量，避免评估缺失")
+    parser.add_argument("--min_pos_per_frame_test", type=int, default=None,
+                       help="测试集每个框架的最小正例数量")
+    parser.add_argument("--split_retry_limit", type=int, default=None,
+                       help="切分重试次数（用于满足最小正例约束）")
     
     # 融合优化参数
     parser.add_argument("--optimize_weights", action="store_true",
@@ -329,8 +391,11 @@ def main():
                        help="训练后进行评估")
     parser.add_argument("--verbose", action="store_true",
                        help="详细输出")
+    parser.add_argument("--preset", type=str, choices=["high_score"],
+                       help="训练预设，high_score启用提分友好配置")
     
     args = parser.parse_args()
+    apply_training_preset(args)
     
     # 设置日志级别
     if args.verbose:
