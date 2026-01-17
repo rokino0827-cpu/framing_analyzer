@@ -190,7 +190,7 @@ class SV2000DataLoader:
         
         # 检查是否有聚合的框架平均分数列
         avg_candidates = [col for col in columns if any(keyword in col.lower() 
-                         for keyword in ['sv_frame_avg', 'frame_avg', 'avg_frame'])]
+                         for keyword in ['sv_frame_avg', 'frame_avg', 'avg_frame', 'sv_average_score', 'average_score'])]
         if avg_candidates:
             frame_mapping['sv_frame_avg'] = avg_candidates[0]
             logger.info(f"Detected frame average column: {avg_candidates[0]}")

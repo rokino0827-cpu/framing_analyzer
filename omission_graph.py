@@ -14,7 +14,7 @@ import networkx as nx
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
-from utils import find_hf_cache_model_path
+from .utils import find_hf_cache_model_path
 
 logger = logging.getLogger(__name__)
 

@@ -32,6 +32,7 @@ class SVFramingHead:
         self.uses_item_level = getattr(self.config, "training_mode", "frame_level") == "item_level"
         self.frame_count = 5
         self.item_count = 20
+        self.frame_names = ["conflict", "human", "econ", "moral", "resp"]
         self.frame_to_items = {
             "conflict": [1, 2, 3, 4],
             "human": [5, 6, 7, 8, 9],
@@ -314,7 +315,12 @@ class SVFramingHead:
         logger.warning("未找到 encoder.layer/transformer.layer，已全部解冻作为回退")
         return True
     
-    def predict_frames(self, texts: List[str], return_logits: bool = False):
+    def predict_frames(
+        self,
+        texts: List[str],
+        return_logits: bool = False,
+        apply_thresholds: Optional[bool] = None,
+    ):
         """预测SV2000框架分数
         
         Args:
@@ -340,6 +346,10 @@ class SVFramingHead:
                 frame_logits = self.aggregate_item_logits(raw_logits) if self.uses_item_level else raw_logits
                 calibrated_logits = self.apply_calibration(frame_logits)
                 frame_probs = torch.sigmoid(calibrated_logits)
+                if apply_thresholds is None:
+                    apply_thresholds = getattr(self.config, "apply_presence_thresholds", False)
+                if apply_thresholds:
+                    frame_probs = self._apply_presence_thresholds(frame_probs)
                 
                 # 转换为numpy数组
                 frame_probs_np = frame_probs.cpu().numpy()
@@ -501,6 +511,35 @@ class SVFramingHead:
         if self.uses_item_level and getattr(self.config, "return_item_predictions", False):
             preds['sv_item_pred'] = np.zeros((batch_size, self.item_count))
         return preds
+
+    def _apply_presence_thresholds(self, frame_probs: torch.Tensor) -> torch.Tensor:
+        """按配置阈值抑制低置信度框架，降低误报"""
+        if not getattr(self.config, "apply_presence_thresholds", False):
+            return frame_probs
+        thresholds = getattr(self.config, "frame_presence_thresholds", None)
+        if not thresholds:
+            return frame_probs
+        default_threshold = float(getattr(self.config, "presence_threshold_default", 0.5))
+        threshold_values = [
+            max(0.0, min(1.0, float(thresholds.get(name, default_threshold))))
+            for name in self.frame_names
+        ]
+        threshold_tensor = torch.tensor(
+            threshold_values,
+            device=frame_probs.device,
+            dtype=frame_probs.dtype
+        )
+        if frame_probs.dim() == 1:
+            return torch.where(
+                frame_probs >= threshold_tensor,
+                frame_probs,
+                torch.zeros_like(frame_probs)
+            )
+        return torch.where(
+            frame_probs >= threshold_tensor.unsqueeze(0),
+            frame_probs,
+            torch.zeros_like(frame_probs)
+        )
 
     def set_temperature(self, temperature: torch.Tensor):
         """设置温度标定参数"""

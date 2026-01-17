@@ -414,7 +414,13 @@ class SVFramingTrainer:
         effective_batches = max(1, num_steps)
         return total_loss / effective_batches
     
-    def evaluate(self, texts: List[str], targets: np.ndarray, return_outputs: bool = False):
+    def evaluate(
+        self,
+        texts: List[str],
+        targets: np.ndarray,
+        return_outputs: bool = False,
+        apply_thresholds: Optional[bool] = None,
+    ):
         """评估模型性能并可选返回预测/标签"""
         if self.criterion is None:
             self.criterion = self._setup_loss_function()
@@ -423,7 +429,7 @@ class SVFramingTrainer:
 
         # 预测（同时返回logits以避免重复前向）
         predictions, raw_logits, frame_logits = self.model.predict_frames(
-            texts, return_logits=True
+            texts, return_logits=True, apply_thresholds=apply_thresholds
         )
         frame_targets_for_metrics = np.asarray(targets)
         if self.model.uses_item_level and targets.shape[1] != self.frame_loss_weights.numel():

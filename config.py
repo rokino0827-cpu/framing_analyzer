@@ -8,7 +8,7 @@ from typing import List, Dict, Optional
 import json
 from pathlib import Path
 
-from utils import find_hf_cache_model_path
+from .utils import find_hf_cache_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +219,10 @@ class SVFramingConfig:
     calibration_lr: float = 0.01
     calibration_use_bias: bool = True  # 是否在温度缩放时同时学习logit偏置，修正整体高估
     pos_weight_cap: float = 8.0  # 控制pos_weight上限，避免极端不平衡时过度推高正例概率
+    # 推理阈值控制（用于压制稀缺框架的误报，默认仅对显式配置生效）
+    apply_presence_thresholds: bool = False
+    presence_threshold_default: float = 0.0
+    frame_presence_thresholds: Optional[Dict[str, float]] = None
     # 评价对齐与均值约束
     corr_loss_weight: float = 0.1  # 相关性辅助损失权重，直接优化Pearson
     frame_avg_loss_weight: float = 0.1  # 框架平均分Huber损失权重，防止整体偏移
@@ -323,6 +327,10 @@ class SVFramingConfig:
                 "econ": 1.0,
                 "moral": 1.8,
                 "resp": 1.6,
+            }
+        if self.frame_presence_thresholds is not None:
+            self.frame_presence_thresholds = {
+                key: float(value) for key, value in self.frame_presence_thresholds.items()
             }
         # 防止负权重意外导致loss为负
         self.corr_loss_weight = max(0.0, self.corr_loss_weight)
@@ -475,6 +483,13 @@ def create_sv2000_config() -> AnalyzerConfig:
         latest_calibrated = Path(__file__).resolve().parent / "outputs/run4_bias_calib/best_sv2000_model_calibrated.pt"
 
     config.sv_framing.pretrained_model_path = str(latest_calibrated)
+
+    # 稀缺框架默认提高阈值，减少误报（可按需覆盖）
+    config.sv_framing.apply_presence_thresholds = True
+    config.sv_framing.frame_presence_thresholds = {
+        "moral": 0.65,
+        "resp": 0.65,
+    }
 
     # 按最新验证结果的优化权重：仅使用SV2000预测，关闭辅助项噪声
     config.fusion.alpha = 1.0

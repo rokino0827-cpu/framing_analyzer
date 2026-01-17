@@ -4,10 +4,21 @@ SV2000 Evaluator - SV2000框架对齐评估器
 
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Union
 import logging
 from scipy.stats import pearsonr, spearmanr
-from sklearn.metrics import mean_absolute_error, mean_squared_error, roc_auc_score, average_precision_score, f1_score, precision_score, recall_score, roc_curve, r2_score
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    roc_auc_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_curve,
+    r2_score,
+    precision_recall_curve,
+)
 import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime
@@ -22,7 +33,13 @@ class SV2000Evaluator:
         self.config = config
         self.frame_names = ['conflict', 'human', 'econ', 'moral', 'resp']
     
-    def evaluate_frame_alignment(self, predictions: Dict, ground_truth: Dict) -> Dict:
+    def evaluate_frame_alignment(
+        self,
+        predictions: Dict,
+        ground_truth: Dict,
+        presence_thresholds: Optional[Dict[str, float]] = None,
+        label_threshold: float = 0.5,
+    ) -> Dict:
         """评估SV2000框架对齐性能
         
         Args:
@@ -48,7 +65,12 @@ class SV2000Evaluator:
         results['frame_average_alignment'] = self._evaluate_frame_average_alignment(predictions, ground_truth)
         
         # 3. 框架存在检测（AUC分析）
-        results['frame_presence_detection'] = self._evaluate_frame_presence_detection(predictions, ground_truth)
+        results['frame_presence_detection'] = self._evaluate_frame_presence_detection(
+            predictions,
+            ground_truth,
+            presence_thresholds=presence_thresholds,
+            label_threshold=label_threshold,
+        )
         
         # 4. 计算整体对齐分数
         results['overall_alignment_score'] = self._calculate_overall_alignment_score(results)
@@ -149,8 +171,14 @@ class SV2000Evaluator:
         else:
             return {'error': 'Insufficient data for frame average alignment'}
     
-    def _evaluate_frame_presence_detection(self, predictions: Dict, ground_truth: Dict, 
-                                         threshold: float = 0.5) -> Dict:
+    def _evaluate_frame_presence_detection(
+        self,
+        predictions: Dict,
+        ground_truth: Dict,
+        threshold: float = 0.5,
+        presence_thresholds: Optional[Dict[str, float]] = None,
+        label_threshold: float = 0.5,
+    ) -> Dict:
         """评估框架存在检测（AUC分析）"""
         detection_results = {}
         
@@ -164,7 +192,7 @@ class SV2000Evaluator:
                 
                 if len(pred_scores) > 1 and len(true_scores) > 1:
                     # 二值化真实标签
-                    true_binary = (true_scores >= threshold).astype(int)
+                    true_binary = (true_scores >= label_threshold).astype(int)
                     
                     # 检查是否有正负样本
                     if len(np.unique(true_binary)) > 1:
@@ -185,8 +213,12 @@ class SV2000Evaluator:
                             fpr, tpr, thresholds = roc_curve(true_binary, pred_scores)
                             optimal_idx = np.argmax(tpr - fpr)
                             optimal_threshold = thresholds[optimal_idx]
-                            
-                            pred_binary = (pred_scores >= optimal_threshold).astype(int)
+
+                            threshold_to_use = optimal_threshold
+                            if presence_thresholds and frame in presence_thresholds:
+                                threshold_to_use = float(presence_thresholds[frame])
+
+                            pred_binary = (pred_scores >= threshold_to_use).astype(int)
                             f1 = f1_score(true_binary, pred_binary)
                             precision = precision_score(true_binary, pred_binary, zero_division=0)
                             recall = recall_score(true_binary, pred_binary, zero_division=0)
@@ -199,6 +231,11 @@ class SV2000Evaluator:
                             'auc_pr': float(auc_pr),
                             'f1_score': float(f1),
                             'optimal_threshold': float(optimal_threshold),
+                            'applied_threshold': float(
+                                presence_thresholds[frame]
+                                if presence_thresholds and frame in presence_thresholds
+                                else optimal_threshold
+                            ),
                             'precision': float(precision),
                             'recall': float(recall),
                             'positive_rate': float(np.mean(true_binary))
@@ -209,10 +246,134 @@ class SV2000Evaluator:
                             'auc_roc': 0.5, 'auc_pr': float(np.mean(true_binary)),
                             'f1_score': 0.0, 'optimal_threshold': threshold,
                             'precision': 0.0, 'recall': 0.0,
-                            'positive_rate': float(np.mean(true_binary))
+                            'positive_rate': float(np.mean(true_binary)),
+                            'applied_threshold': float(
+                                presence_thresholds[frame]
+                                if presence_thresholds and frame in presence_thresholds
+                                else threshold
+                            ),
                         }
         
         return detection_results
+
+    def _select_threshold_by_pr(
+        self,
+        true_binary: np.ndarray,
+        pred_scores: np.ndarray,
+        *,
+        beta: float = 0.5,
+        min_precision: Optional[float] = None,
+        min_recall: Optional[float] = None,
+        default_threshold: float = 0.5,
+    ) -> Tuple[float, Dict[str, float]]:
+        """基于PR曲线选择阈值（偏向精度或召回）"""
+        precision, recall, thresholds = precision_recall_curve(true_binary, pred_scores)
+        if thresholds.size == 0:
+            return default_threshold, {
+                "precision": 0.0,
+                "recall": 0.0,
+                "f_beta": 0.0,
+            }
+
+        precision = precision[:-1]
+        recall = recall[:-1]
+        best_idx = None
+        best_score = -1.0
+
+        beta_sq = beta ** 2
+        for idx, threshold in enumerate(thresholds):
+            p = precision[idx]
+            r = recall[idx]
+            if min_precision is not None and p < min_precision:
+                continue
+            if min_recall is not None and r < min_recall:
+                continue
+            denom = (beta_sq * p + r)
+            score = (1 + beta_sq) * p * r / denom if denom > 0 else 0.0
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        if best_idx is None:
+            pred_binary = (pred_scores >= default_threshold).astype(int)
+            precision_val = precision_score(true_binary, pred_binary, zero_division=0)
+            recall_val = recall_score(true_binary, pred_binary, zero_division=0)
+            denom = (beta_sq * precision_val + recall_val)
+            f_beta = (1 + beta_sq) * precision_val * recall_val / denom if denom > 0 else 0.0
+            return default_threshold, {
+                "precision": float(precision_val),
+                "recall": float(recall_val),
+                "f_beta": float(f_beta),
+                "beta": float(beta),
+                "constraint_satisfied": False,
+            }
+
+        selected_threshold = float(thresholds[best_idx])
+        pred_binary = (pred_scores >= selected_threshold).astype(int)
+        precision_val = precision_score(true_binary, pred_binary, zero_division=0)
+        recall_val = recall_score(true_binary, pred_binary, zero_division=0)
+        f_beta = (
+            (1 + beta_sq) * precision_val * recall_val / (beta_sq * precision_val + recall_val)
+            if (precision_val + recall_val) > 0
+            else 0.0
+        )
+        return selected_threshold, {
+            "precision": float(precision_val),
+            "recall": float(recall_val),
+            "f_beta": float(f_beta),
+            "beta": float(beta),
+            "constraint_satisfied": True,
+        }
+
+    def tune_presence_thresholds(
+        self,
+        predictions: Dict,
+        ground_truth: Dict,
+        *,
+        base_threshold: float = 0.5,
+        frames: Optional[List[str]] = None,
+        beta: float = 0.5,
+        min_precision: Optional[Union[float, Dict[str, float]]] = None,
+        min_recall: Optional[Union[float, Dict[str, float]]] = None,
+    ) -> Tuple[Dict[str, float], Dict[str, Dict[str, float]]]:
+        """基于验证集预测自动搜索presence阈值"""
+        target_frames = frames or self.frame_names
+        thresholds: Dict[str, float] = {}
+        details: Dict[str, Dict[str, float]] = {}
+
+        for frame in target_frames:
+            pred_key = f"sv_{frame}_pred"
+            true_key = f"y_{frame}"
+            if pred_key not in predictions or true_key not in ground_truth:
+                continue
+
+            pred_scores = np.array(predictions[pred_key])
+            true_scores = np.array(ground_truth[true_key])
+            if len(pred_scores) <= 1 or len(true_scores) <= 1:
+                continue
+
+            true_binary = (true_scores >= base_threshold).astype(int)
+            if len(np.unique(true_binary)) <= 1:
+                continue
+
+            frame_min_precision = (
+                min_precision.get(frame) if isinstance(min_precision, dict) else min_precision
+            )
+            frame_min_recall = (
+                min_recall.get(frame) if isinstance(min_recall, dict) else min_recall
+            )
+            threshold, metrics = self._select_threshold_by_pr(
+                true_binary,
+                pred_scores,
+                beta=beta,
+                min_precision=frame_min_precision,
+                min_recall=frame_min_recall,
+                default_threshold=base_threshold,
+            )
+            thresholds[frame] = threshold
+            details[frame] = metrics
+
+        return thresholds, details
     
     def _calculate_overall_alignment_score(self, results: Dict) -> float:
         """计算整体对齐分数"""
@@ -400,6 +561,19 @@ class SV2000Evaluator:
             report_lines.append(f"- Pearson correlation: {fa['pearson_r']:.3f}")
             report_lines.append(f"- MAE: {fa['mae']:.3f}")
             report_lines.append(f"- R² score: {fa['r2_score']:.3f}")
+            report_lines.append("")
+
+        # 框架存在检测
+        if 'frame_presence_detection' in results and results['frame_presence_detection']:
+            report_lines.append("### Frame Presence Detection")
+            report_lines.append("| Frame | AUC-ROC | AUC-PR | F1 | Precision | Recall | Positive Rate |")
+            report_lines.append("|-------|---------|--------|----|-----------|--------|---------------|")
+            for frame, metrics in results['frame_presence_detection'].items():
+                report_lines.append(
+                    f"| {frame.capitalize()} | {metrics['auc_roc']:.3f} | {metrics['auc_pr']:.3f} | "
+                    f"{metrics['f1_score']:.3f} | {metrics['precision']:.3f} | {metrics['recall']:.3f} | "
+                    f"{metrics['positive_rate']:.3f} |"
+                )
             report_lines.append("")
         
         # 融合性能

@@ -192,6 +192,11 @@ def train_model(args):
     # 初始化训练管道
     logger.info("初始化训练管道...")
     trainer = SV2000TrainingPipeline(config, args.data_path)
+    if args.init_model_path:
+        if not os.path.exists(args.init_model_path):
+            raise FileNotFoundError(f"初始化模型不存在: {args.init_model_path}")
+        trainer.trainer.load_model(args.init_model_path)
+        logger.info("已加载初始化模型: %s", args.init_model_path)
     
     # 运行训练
     logger.info(f"开始训练 {args.epochs} 轮...")
@@ -277,6 +282,20 @@ def evaluate_model(args, training_report: Dict[str, Any]):
         
         for frame, metrics in alignment_results['frame_correlations'].items():
             logger.info(f"  {frame}: Pearson={metrics['pearson_r']:.4f}, MAE={metrics['mae']:.4f}")
+
+        presence_results = alignment_results.get('frame_presence_detection', {})
+        if presence_results:
+            logger.info("框架存在检测（AUC/PR/F1）:")
+            for frame, metrics in presence_results.items():
+                logger.info(
+                    "  %s: AUC-ROC=%.4f, AUC-PR=%.4f, F1=%.4f, Precision=%.4f, Recall=%.4f",
+                    frame,
+                    metrics.get('auc_roc', 0.0),
+                    metrics.get('auc_pr', 0.0),
+                    metrics.get('f1_score', 0.0),
+                    metrics.get('precision', 0.0),
+                    metrics.get('recall', 0.0),
+                )
         
         # 保存评估报告
         eval_report_path = os.path.join(args.output_dir, "evaluation_report.md")
@@ -389,6 +408,8 @@ def main():
     # 其他参数
     parser.add_argument("--evaluate", action="store_true",
                        help="训练后进行评估")
+    parser.add_argument("--init_model_path", type=str, default=None,
+                       help="初始化模型路径（用于从已有模型继续优化）")
     parser.add_argument("--verbose", action="store_true",
                        help="详细输出")
     parser.add_argument("--preset", type=str, choices=["high_score"],
